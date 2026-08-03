@@ -1,0 +1,26 @@
+# 构建产物
+backend/target/
+frontend/dist/
+
+# 依赖
+frontend/node_modules/
+node_modules/
+.m2repo/
+
+# 数据库（数据由备份机制负责）
+backend/data/
+data/
+*.mv.db
+*.trace.db
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# 日志
+*.log
+
+# 系统
+.DS_Store
+Thumbs.db

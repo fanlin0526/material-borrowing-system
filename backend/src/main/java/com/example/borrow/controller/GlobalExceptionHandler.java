@@ -1,0 +1,12 @@
+package com.example.borrow.controller;
+
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+    @ExceptionHandler(RuntimeException.class)
+    public Result<?> handleRuntime(RuntimeException e) {
+        return Result.fail(e.getMessage());
+    }
+}
