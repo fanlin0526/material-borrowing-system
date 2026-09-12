@@ -19,6 +19,9 @@ public class MaterialService {
     @Autowired
     private CategoryRepository categoryRepository;
 
+    @Autowired
+    private StockLogService stockLogService;
+
     public List<Material> list(String keyword, String category) {
         if ((keyword == null || keyword.isEmpty()) && (category == null || category.isEmpty())) {
             return materialRepository.findAll();
@@ -44,6 +47,11 @@ public class MaterialService {
             if (material.getWarningThreshold() == null) {
                 material.setWarningThreshold(Math.max(2, material.getTotalQuantity() / 5));
             }
+            Material saved = materialRepository.save(material);
+            // 库存流水：期初入库
+            stockLogService.record(saved, "IN", saved.getAvailableQuantity(), "MANUAL", saved.getId(),
+                    "新增物资建档，期初入库");
+            return saved;
         }
         return materialRepository.save(material);
     }
@@ -65,7 +73,13 @@ public class MaterialService {
         if (updated.getWarningThreshold() != null) {
             material.setWarningThreshold(updated.getWarningThreshold());
         }
-        return materialRepository.save(material);
+        Material saved = materialRepository.save(material);
+        // 库存流水：手工调整数量（若总量发生变化）
+        if (delta != 0) {
+            stockLogService.record(saved, "ADJUST", delta, "MANUAL", saved.getId(),
+                    "编辑物资，数量调整 " + (delta > 0 ? "+" : "") + delta);
+        }
+        return saved;
     }
 
     @Transactional

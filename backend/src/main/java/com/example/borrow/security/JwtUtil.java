@@ -4,12 +4,41 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
-import java.security.Key;
+import javax.crypto.SecretKey;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.Date;
 
 public class JwtUtil {
 
-    private static final Key KEY = Keys.secretKeyFor(SignatureAlgorithm.HS256);
+    /**
+     * JWT 签名密钥（HS256 需要 ≥256 bits）
+     * 生产环境应通过 application.yml 的 jwt.secret 或环境变量 JWT_SECRET 覆盖。
+     */
+    private static final String DEFAULT_SECRET = "MaterialBorrowSystem2024SecretKeyForJWT!!_32bytes";
+    private static SecretKey KEY;
+
+    static {
+        String secret = System.getenv("JWT_SECRET");
+        if (secret == null || secret.isEmpty()) {
+            secret = System.getProperty("jwt.secret");
+        }
+        if (secret == null || secret.isEmpty()) {
+            secret = DEFAULT_SECRET;
+        }
+        // Base64 编码后生成 HMAC-SHA256 密钥
+        String encoded = Base64.getEncoder().encodeToString(secret.getBytes(StandardCharsets.UTF_8));
+        KEY = Keys.hmacShaKeyFor(encoded.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** 允许 Spring 配置类在启动时注入 application.yml 中的 jwt.secret */
+    public static void setSecret(String secret) {
+        if (secret != null && !secret.isEmpty()) {
+            String encoded = Base64.getEncoder().encodeToString(secret.getBytes(StandardCharsets.UTF_8));
+            KEY = Keys.hmacShaKeyFor(encoded.getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
     private static final long EXPIRATION = 24 * 60 * 60 * 1000L; // 24小时
 
     /** 生成 Token */

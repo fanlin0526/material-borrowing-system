@@ -154,6 +154,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, ArrowLeft, ArrowRight, Monitor, Box, DishDot, MagicStick, Histogram } from '@element-plus/icons-vue'
 import { reservationApi, materialApi, categoryApi } from '../api'
+import { authStore } from '../stores/auth'
 
 const route = useRoute()
 
@@ -176,11 +177,9 @@ const hours = Array.from({ length: 15 }, (_, i) => i + 7) // 7:00 ~ 21:00
 const weekDays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 const colors = ['#409EFF', '#67C23A', '#E6A23C', '#9B59B6', '#00C9A7', '#F56C6C']
 
-// 当前用户
-const currentUser = computed(() => {
-  try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
-})
-const isAdmin = computed(() => currentUser.value.role === 'SUPER_ADMIN' || currentUser.value.role === 'TEACHER')
+// 当前用户 — 以 authStore 为准
+const currentUser = computed(() => authStore.userInfo || {})
+const isAdmin = computed(() => authStore.isAdmin)
 
 // 本周起始日期
 const monday = computed(() => {

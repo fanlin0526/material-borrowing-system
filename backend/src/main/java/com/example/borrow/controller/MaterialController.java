@@ -2,6 +2,7 @@ package com.example.borrow.controller;
 
 import com.example.borrow.entity.Material;
 import com.example.borrow.service.MaterialService;
+import com.example.borrow.service.StockLogService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -13,6 +14,9 @@ public class MaterialController {
 
     @Autowired
     private MaterialService materialService;
+
+    @Autowired
+    private StockLogService stockLogService;
 
     /** 列表 / 搜索 */
     @GetMapping
@@ -56,5 +60,13 @@ public class MaterialController {
     @GetMapping("/low-stock")
     public Result<?> lowStock() {
         return Result.ok(materialService.lowStock());
+    }
+
+    /** 库存流水（按物资查，分页） */
+    @GetMapping("/{id}/logs")
+    public Result<?> logs(@PathVariable Long id,
+                          @RequestParam(defaultValue = "1") int page,
+                          @RequestParam(defaultValue = "10") int size) {
+        return Result.ok(stockLogService.listByMaterial(id, page, size));
     }
 }

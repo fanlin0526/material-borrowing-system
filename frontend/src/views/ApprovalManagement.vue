@@ -48,6 +48,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { authStore } from '../stores/auth'
 
 const loading = ref(false)
 const allPending = ref([])
@@ -55,9 +56,7 @@ const allPending = ref([])
 const borrowPending = computed(() => allPending.value.filter(r => r.status === 'PENDING'))
 const extendPending = computed(() => allPending.value.filter(r => r.status === 'PENDING_EXTEND'))
 
-const currentUser = computed(() => {
-  try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
-})
+const currentUser = computed(() => authStore.userInfo || {})
 
 function formatTime(t) {
   if (!t) return ''

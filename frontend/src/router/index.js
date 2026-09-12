@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { authStore } from '../stores/auth'
 
 const routes = [
   { path: '/login', name: 'Login', component: () => import('../views/Login.vue'), meta: { public: true } },
@@ -22,6 +23,9 @@ const routes = [
     meta: { roles: ['SUPER_ADMIN'] } },
   { path: '/categories', name: 'CategoryManagement', component: () => import('../views/CategoryManagement.vue'),
     meta: { roles: ['SUPER_ADMIN'] } },
+  // 教师/管理员专属 - 采购入库
+  { path: '/stock-in', name: 'StockIn', component: () => import('../views/StockIn.vue'),
+    meta: { roles: ['SUPER_ADMIN', 'TEACHER'] } },
 ]
 
 const router = createRouter({
@@ -29,23 +33,15 @@ const router = createRouter({
   routes
 })
 
-// 全局路由守卫
+// 全局路由守卫 — 角色以服务端验证结果为准
 router.beforeEach((to, from, next) => {
-  const token = localStorage.getItem('token')
-  const userStr = localStorage.getItem('user')
-  if (!to.meta.public && !token) {
+  if (!to.meta.public && !authStore.isLoggedIn) {
     next('/login')
     return
   }
   if (to.meta.roles) {
-    try {
-      const user = JSON.parse(userStr)
-      if (!to.meta.roles.includes(user.role)) {
-        next('/dashboard')
-        return
-      }
-    } catch {
-      next('/login')
+    if (!to.meta.roles.includes(authStore.role)) {
+      next('/dashboard')
       return
     }
   }

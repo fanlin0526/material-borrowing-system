@@ -125,14 +125,13 @@ import { ref, onMounted, nextTick, computed } from 'vue'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
 import { dashboardApi, categoryApi } from '../api'
+import { authStore } from '../stores/auth'
 
-// 当前用户
-const currentUser = computed(() => {
-  try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
-})
+// 当前用户 — 以 authStore 为准
+const currentUser = computed(() => authStore.userInfo || {})
 const roleClass = computed(() => {
-  if (currentUser.value.role === 'SUPER_ADMIN') return 'super'
-  if (currentUser.value.role === 'TEACHER') return 'teacher'
+  if (authStore.isSuperAdmin) return 'super'
+  if (authStore.isAdmin) return 'teacher'
   return 'student'
 })
 

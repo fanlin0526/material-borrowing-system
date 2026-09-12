@@ -50,6 +50,7 @@
         <el-tab-pane label="待审批" name="PENDING" />
         <el-tab-pane label="借用中" name="BORROWED" />
         <el-tab-pane v-if="isAdmin" label="已逾期" name="OVERDUE" />
+        <el-tab-pane label="已领用" name="CONSUMED" />
         <el-tab-pane label="已归还" name="RETURNED" />
         <el-tab-pane v-if="isAdmin" label="已损坏" name="DAMAGED" />
       </el-tabs>
@@ -61,6 +62,11 @@
         </el-col>
         <el-col :span="4">
           <el-button type="primary" @click="loadData">查询</el-button>
+        </el-col>
+        <el-col :span="12" style="text-align: right">
+          <el-button type="success" plain @click="handleExport">
+            <el-icon style="margin-right: 4px"><Download /></el-icon>导出Excel
+          </el-button>
         </el-col>
       </el-row>
     </el-card>
@@ -115,6 +121,16 @@
           </template>
         </el-table-column>
       </el-table>
+      <!-- 分页 -->
+      <div style="display: flex; justify-content: flex-end; margin-top: 16px">
+        <el-pagination
+          v-model:current-page="currentPage"
+          :page-size="pageSize"
+          :total="total"
+          layout="total, prev, pager, next, jumper"
+          @current-change="onPageChange"
+        />
+      </div>
     </el-card>
 
     <!-- 归还弹窗 -->
@@ -179,20 +195,22 @@
 <script setup>
 import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Search } from '@element-plus/icons-vue'
-import { borrowApi, categoryApi } from '../api'
+import { Search, Download } from '@element-plus/icons-vue'
+import { borrowApi, categoryApi, excelApi } from '../api'
+import { authStore } from '../stores/auth'
 
 const loading = ref(false)
 const tableData = ref([])
+const currentPage = ref(1)
+const pageSize = ref(10)
+const total = ref(0)
 const activeTab = ref('all')
 const borrowStats = reactive({ borrowingCount: 0, returnedToday: 0, totalRecords: 0 })
 const search = reactive({ status: '', keyword: '' })
 const categories = ref([])
 
-const currentUser = computed(() => {
-  try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
-})
-const isAdmin = computed(() => currentUser.value.role === 'SUPER_ADMIN' || currentUser.value.role === 'TEACHER')
+const currentUser = computed(() => authStore.userInfo || {})
+const isAdmin = computed(() => authStore.isAdmin)
 
 const overdueCount = computed(() =>
   tableData.value.filter(r => r.status === 'OVERDUE' || isOverdue(r)).length
@@ -215,12 +233,12 @@ function categoryTag(cat) {
 }
 function statusLabel(s) {
   const map = { PENDING: '待审批', APPROVED: '已通过', REJECTED: '已拒绝', PENDING_EXTEND: '待审批延期',
-    BORROWED: '借用中', RETURNED: '已归还', OVERDUE: '已逾期', DAMAGED: '已损坏' }
+    BORROWED: '借用中', CONSUMED: '已领用', RETURNED: '已归还', OVERDUE: '已逾期', DAMAGED: '已损坏' }
   return map[s] || s
 }
 function statusTag(s) {
   const map = { PENDING: 'info', APPROVED: 'warning', REJECTED: 'danger', PENDING_EXTEND: 'info',
-    BORROWED: 'warning', RETURNED: 'success', OVERDUE: 'danger', DAMAGED: 'danger' }
+    BORROWED: 'warning', CONSUMED: 'success', RETURNED: 'success', OVERDUE: 'danger', DAMAGED: 'danger' }
   return map[s] || 'info'
 }
 function rowClassName({ row }) {
@@ -251,17 +269,30 @@ function getOverdueDays(row) {
 
 function onTabChange(name) {
   search.status = name === 'all' ? '' : name
+  currentPage.value = 1
+  loadData()
+}
+
+function onPageChange(page) {
+  currentPage.value = page
   loadData()
 }
 
 function loadData() {
   loading.value = true
-  const params = { status: search.status, keyword: search.keyword }
+  const params = { status: search.status, keyword: search.keyword, page: currentPage.value, size: pageSize.value }
   if (!isAdmin.value && currentUser.value.realName) {
     params.keyword = currentUser.value.realName
   }
   borrowApi.list(params).then(data => {
-    tableData.value = data
+    // 适配分页响应格式 { content, totalElements, totalPages, page, size }
+    if (data && data.content) {
+      tableData.value = data.content
+      total.value = data.totalElements
+    } else {
+      tableData.value = Array.isArray(data) ? data : []
+      total.value = tableData.value.length
+    }
   }).catch(e => ElMessage.error('加载失败：' + e.message))
     .finally(() => loading.value = false)
 
@@ -333,6 +364,12 @@ function handleExtend() {
 
 function showRemark(row) {
   ElMessage.info(row.returnRemark)
+}
+
+function handleExport() {
+  excelApi.exportBorrows({ status: search.status, keyword: search.keyword })
+    .then(() => ElMessage.success('导出成功'))
+    .catch(e => ElMessage.error(e.message))
 }
 
 onMounted(() => {

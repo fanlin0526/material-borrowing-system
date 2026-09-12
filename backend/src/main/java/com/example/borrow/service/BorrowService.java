@@ -8,6 +8,10 @@ import com.example.borrow.repository.MaterialRepository;
 import com.example.borrow.repository.OperationLogRepository;
 import com.example.borrow.repository.SystemConfigRepository;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
@@ -22,6 +26,7 @@ public class BorrowService {
     @Autowired private OperationLogRepository operationLogRepository;
     @Autowired private SystemConfigRepository systemConfigRepository;
     @Autowired private NotificationService notificationService;
+    @Autowired private StockLogService stockLogService;
 
     private int getConfigInt(String key, int def) {
         return systemConfigRepository.findByConfigKey(key)
@@ -34,6 +39,8 @@ public class BorrowService {
     @Transactional
     public BorrowRecord requestBorrow(Long materialId, String borrower, Integer quantity,
                                        String purpose, LocalDateTime expectedReturnTime) {
+        if (quantity == null || quantity <= 0)
+            throw new RuntimeException("借用数量必须大于0");
         Material material = materialRepository.findById(materialId)
                 .orElseThrow(() -> new RuntimeException("物资不存在"));
         if (material.getAvailableQuantity() < quantity)
@@ -72,12 +79,22 @@ public class BorrowService {
         material.setAvailableQuantity(material.getAvailableQuantity() - record.getBorrowQuantity());
         materialRepository.save(material);
 
-        record.setStatus("APPROVED");
+        // 消耗型物资（耗材/水/试剂）：审批通过即核销库存，状态=已领用；可归还型（设备/玻璃器皿）：审批通过即借用中
+        boolean consumable = !Material.isReturnable(material.getCategory());
+        record.setStatus(consumable ? "CONSUMED" : "BORROWED");
         record.setApprover(approver);
         record.setApproveTime(LocalDateTime.now());
         record = borrowRecordRepository.save(record);
 
-        log(approver, "APPROVE", "通过「" + record.getBorrower() + "」借用「" + record.getMaterialName() + "」", "BORROW", recordId);
+        // 库存流水：消耗型记"领用核销"，可归还型记"借出"
+        stockLogService.record(material, consumable ? "CONSUME" : "OUT_BORROW",
+                -record.getBorrowQuantity(), "BORROW", recordId,
+                (consumable ? "领用核销：" : "审批借出：") + record.getBorrower());
+
+        log(approver, consumable ? "APPROVE_CONSUME" : "APPROVE",
+                (consumable ? "批准领用「" : "通过「") + record.getBorrower() + "」"
+                        + (consumable ? "领用「" : "借用「") + record.getMaterialName() + "」",
+                "BORROW", recordId);
         return record;
     }
 
@@ -186,6 +203,10 @@ public class BorrowService {
         material.setAvailableQuantity(material.getAvailableQuantity() + actualReturn);
         materialRepository.save(material);
 
+        // 库存流水：归还入库
+        stockLogService.record(material, "RETURN", actualReturn, "BORROW", recordId,
+                "归还：" + record.getBorrower());
+
         // 计算逾期天数和罚款
         int overdueDays = 0;
         double fineAmount = 0;
@@ -230,14 +251,14 @@ public class BorrowService {
 
     // ==================== 列表 / 统计 ====================
 
-    public List<BorrowRecord> list(String status, String keyword) {
+    public Page<BorrowRecord> list(String status, String keyword, Pageable pageable) {
         if (status != null && !status.isEmpty()) {
-            return borrowRecordRepository.findByStatusOrderByBorrowTimeDesc(status);
+            return borrowRecordRepository.findByStatusOrderByBorrowTimeDesc(status, pageable);
         }
         if (keyword != null && !keyword.isEmpty()) {
-            return borrowRecordRepository.search(null, keyword);
+            return borrowRecordRepository.search(keyword, pageable);
         }
-        return borrowRecordRepository.findAllByOrderByBorrowTimeDesc();
+        return borrowRecordRepository.findAllByOrderByBorrowTimeDesc(pageable);
     }
 
     /** 待审批列表（教师用） */

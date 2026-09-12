@@ -34,21 +34,20 @@
             @change="loadData"
           />
         </el-col>
-        <el-col :span="7">
+        <el-col :span="10">
           <el-button type="primary" @click="loadData">
             <el-icon style="margin-right: 4px"><Search /></el-icon>查询
           </el-button>
-          <el-button
-            type="warning"
-            :disabled="checkedIds.length === 0"
-            @click="showBatchDialog"
-          >
-            <el-icon style="margin-right: 4px"><ShoppingCart /></el-icon>
-            批量借用（{{ checkedIds.length }}）
+          <el-button type="success" plain @click="handleExport">
+            <el-icon style="margin-right: 4px"><Download /></el-icon>导出Excel
+          </el-button>
+          <el-button v-if="isSuperAdmin" type="warning" plain @click="triggerImport">
+            <el-icon style="margin-right: 4px"><Upload /></el-icon>导入Excel
           </el-button>
           <el-button v-if="isSuperAdmin" type="success" @click="showAddDialog">
             <el-icon style="margin-right: 4px"><Plus /></el-icon>新增物资
           </el-button>
+          <input ref="fileInput" type="file" accept=".xlsx,.xls" style="display: none" @change="handleImport" />
         </el-col>
       </el-row>
     </el-card>
@@ -58,10 +57,7 @@
       <el-table
         :data="tableData" stripe v-loading="loading" style="width: 100%"
         :header-cell-style="{ background: '#f5f7fa', fontWeight: 600 }"
-        @selection-change="handleSelectionChange"
-        ref="tableRef"
       >
-        <el-table-column type="selection" width="45" :selectable="checkSelectable" />
         <el-table-column prop="code" label="编号" width="100" />
         <el-table-column prop="name" label="物资名称" min-width="130" />
         <el-table-column label="类别" width="100">
@@ -85,14 +81,15 @@
           </template>
         </el-table-column>
         <el-table-column prop="location" label="存放位置" width="130" show-overflow-tooltip />
-        <el-table-column label="操作" width="280" fixed="right">
+        <el-table-column label="操作" width="320" fixed="right">
           <template #default="{ row }">
             <el-button v-if="isBorrowable(row)" type="warning" size="small" :disabled="row.availableQuantity <= 0" @click="showBorrowDialog(row)">
-              借用
+              {{ isConsumable(row) ? '领用' : '借用' }}
             </el-button>
             <el-button v-else type="success" size="small" :disabled="row.availableQuantity <= 0 || row.deviceStatus !== 'AVAILABLE'" @click="goReserve(row)">
               预约
             </el-button>
+            <el-button type="info" size="small" plain @click="showLogs(row)">流水</el-button>
             <template v-if="isSuperAdmin">
               <el-button type="primary" size="small" @click="showEditDialog(row)">编辑</el-button>
               <el-popconfirm title="确定删除该物资？" @confirm="handleDelete(row.id)">
@@ -101,9 +98,7 @@
                 </template>
               </el-popconfirm>
             </template>
-            <el-tag v-else type="info" size="small" effect="plain" style="margin-left: 8px">
-              {{ isAdmin ? '仅查看' : '仅查看' }}
-            </el-tag>
+            <el-tag v-else type="info" size="small" effect="plain" style="margin-left: 8px">仅查看</el-tag>
           </template>
         </el-table-column>
       </el-table>
@@ -153,8 +148,8 @@
       </template>
     </el-dialog>
 
-    <!-- 借用弹窗 -->
-    <el-dialog v-model="borrowDialog.visible" title="借用物资" width="480px">
+    <!-- 领用/借用弹窗 -->
+    <el-dialog v-model="borrowDialog.visible" :title="isConsumable(borrowDialog.material) ? '领用物资' : '借用物资'" width="480px">
       <el-form :model="borrowDialog.form" label-width="100px">
         <el-form-item label="物资名称">
           <el-input :model-value="borrowDialog.material?.name" disabled />
@@ -164,145 +159,86 @@
             {{ categoryLabel(borrowDialog.material?.category) }}
           </el-tag>
         </el-form-item>
-        <el-form-item label="可借数量">
+        <el-form-item :label="isConsumable(borrowDialog.material) ? '可领数量' : '可借数量'">
           <el-tag type="success" size="large">{{ borrowDialog.material?.availableQuantity }} {{ borrowDialog.material?.unit }}</el-tag>
         </el-form-item>
-        <el-form-item label="借用人" required>
-          <el-input v-model="borrowDialog.form.borrower" placeholder="请输入借用人姓名" />
+        <el-form-item :label="isConsumable(borrowDialog.material) ? '领用人' : '借用人'" required>
+          <el-input v-model="borrowDialog.form.borrower" :placeholder="'请输入' + (isConsumable(borrowDialog.material) ? '领用人' : '借用人') + '姓名'" />
         </el-form-item>
-        <el-form-item label="借用数量" required>
+        <el-form-item :label="isConsumable(borrowDialog.material) ? '领用数量' : '借用数量'" required>
           <el-input-number v-model="borrowDialog.form.quantity" :min="1" :max="borrowDialog.material?.availableQuantity" style="width: 100%" />
         </el-form-item>
         <el-form-item label="用途说明">
           <el-input v-model="borrowDialog.form.purpose" type="textarea" :rows="2" placeholder="实验项目名称或用途" />
         </el-form-item>
-        <el-form-item label="预计归还">
+        <el-form-item v-if="!isConsumable(borrowDialog.material)" label="预计归还">
           <el-date-picker v-model="borrowDialog.form.expectedReturnTime" type="datetime" placeholder="选填" format="YYYY-MM-DD HH:mm" style="width: 100%" />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="borrowDialog.visible = false">取消</el-button>
-        <el-button type="warning" @click="handleBorrow" :loading="borrowDialog.saving">确认借用</el-button>
+        <el-button type="warning" @click="handleBorrow" :loading="borrowDialog.saving">
+          {{ isConsumable(borrowDialog.material) ? '确认领用' : '确认借用' }}
+        </el-button>
       </template>
     </el-dialog>
 
-    <!-- 批量借用弹窗 -->
-    <el-dialog v-model="batchDialog.visible" title="批量借用物资" width="780px" :close-on-click-modal="false">
-      <!-- 统一填写区 -->
-      <el-card shadow="never" style="margin-bottom: 16px; background: #f5f7fa">
-        <el-row :gutter="16" style="align-items: center">
-          <el-col :span="8">
-            <span style="color: #606266; font-size: 14px; margin-right: 8px">借用人：</span>
-            <el-input
-              v-model="batchDialog.borrower"
-              placeholder="请输入借用人姓名"
-              style="width: 160px"
-              @input="syncBorrower"
-            />
-          </el-col>
-          <el-col :span="8">
-            <span style="color: #606266; font-size: 14px; margin-right: 8px">用途：</span>
-            <el-input
-              v-model="batchDialog.purpose"
-              placeholder="统一用途（可单独改）"
-              style="width: 160px"
-              @input="syncPurpose"
-            />
-          </el-col>
-          <el-col :span="8">
-            <span style="color: #606266; font-size: 14px; margin-right: 8px">预计归还：</span>
-            <el-date-picker
-              v-model="batchDialog.expectedReturnTime"
-              type="datetime"
-              placeholder="选填"
-              format="YYYY-MM-DD HH:mm"
-              style="width: 180px"
-              @change="syncReturnTime"
-            />
-          </el-col>
-        </el-row>
-      </el-card>
-
-      <!-- 已选物资列表 -->
-      <el-table :data="batchDialog.items" stripe max-height="360" style="width: 100%">
-        <el-table-column prop="name" label="物资名称" min-width="130" />
-        <el-table-column label="类别" width="90">
+    <!-- 库存流水弹窗 -->
+    <el-dialog v-model="logDialog.visible" :title="'库存流水 — ' + (logDialog.material?.name || '')" width="760px">
+      <el-table :data="logDialog.list" stripe v-loading="logDialog.loading" max-height="420" style="width: 100%">
+        <el-table-column label="变动类型" width="100" align="center">
           <template #default="{ row }">
-            <el-tag :type="categoryTag(row.category)" size="small" effect="light">
-              {{ categoryLabel(row.category) }}
-            </el-tag>
+            <el-tag :type="logTypeTag(row.changeType)" size="small" effect="dark">{{ logTypeLabel(row.changeType) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="可借" width="80" align="center">
+        <el-table-column label="变动数量" width="90" align="center">
           <template #default="{ row }">
-            <span :style="{ color: row.availableQuantity <= 0 ? '#F56C6C' : '#67C23A', fontWeight: 'bold' }">
-              {{ row.availableQuantity }}
+            <span :style="{ color: row.changeQuantity > 0 ? '#67C23A' : '#F56C6C', fontWeight: 'bold' }">
+              {{ row.changeQuantity > 0 ? '+' : '' }}{{ row.changeQuantity }}
             </span>
-            <span style="color: #909399"> / {{ row.unit }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="借用数量" width="130" align="center">
-          <template #default="{ row }">
-            <el-input-number
-              v-model="row.quantity"
-              :min="1"
-              :max="row.availableQuantity"
-              size="small"
-              controls-position="right"
-              style="width: 100px"
-            />
-          </template>
-        </el-table-column>
-        <el-table-column label="用途说明" min-width="150">
-          <template #default="{ row }">
-            <el-input v-model="row.purpose" size="small" placeholder="单独填写用途" />
-          </template>
-        </el-table-column>
-        <el-table-column width="50" align="center">
-          <template #default="{ $index }">
-            <el-button type="danger" size="small" :icon="Delete" circle text @click="removeBatchItem($index)" />
-          </template>
+        <el-table-column label="变动前" prop="beforeQuantity" width="70" align="center" />
+        <el-table-column label="变动后" prop="afterQuantity" width="70" align="center" />
+        <el-table-column prop="operator" label="操作人" width="90" />
+        <el-table-column prop="remark" label="备注" min-width="160" show-overflow-tooltip />
+        <el-table-column label="时间" width="150">
+          <template #default="{ row }">{{ formatTime(row.createTime) }}</template>
         </el-table-column>
       </el-table>
-
-      <div style="margin-top: 16px; text-align: center; color: #909399; font-size: 13px">
-        共 <b style="color: #409EFF">{{ batchDialog.items.length }}</b> 种物资，
-        合计借用 <b style="color: #E6A23C">{{ totalBatchQty }}</b> 件
+      <div style="display: flex; justify-content: flex-end; margin-top: 12px">
+        <el-pagination
+          v-model:current-page="logDialog.page"
+          :page-size="logDialog.size"
+          :total="logDialog.total"
+          layout="total, prev, pager, next"
+          @current-change="loadLogs"
+        />
       </div>
-
-      <template #footer>
-        <el-button @click="batchDialog.visible = false">取消</el-button>
-        <el-button type="warning" @click="handleBatchBorrow" :loading="batchDialog.saving">
-          确认全部借用
-        </el-button>
-      </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, onMounted, computed } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Search, Plus, ShoppingCart, Delete } from '@element-plus/icons-vue'
-import { materialApi, borrowApi, categoryApi } from '../api'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Search, Plus, Download, Upload } from '@element-plus/icons-vue'
+import { materialApi, borrowApi, categoryApi, excelApi } from '../api'
+import { authStore } from '../stores/auth'
 import { useRouter } from 'vue-router'
 const router = useRouter()
 
 const loading = ref(false)
 const tableData = ref([])
-const tableRef = ref()
+const fileInput = ref()
 const search = reactive({ keyword: '', category: '' })
 const filterBorrowable = ref(false)
-const checkedIds = ref([])
-const checkedItems = ref([])
 const categories = ref([])
 
-// 当前登录用户
-const currentUser = computed(() => {
-  try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
-})
-const isAdmin = computed(() => currentUser.value.role === 'SUPER_ADMIN' || currentUser.value.role === 'TEACHER')
-const isSuperAdmin = computed(() => currentUser.value.role === 'SUPER_ADMIN')
+// 当前登录用户 — 以 authStore 为准
+const currentUser = computed(() => authStore.userInfo || {})
+const isAdmin = computed(() => authStore.isAdmin)
+const isSuperAdmin = computed(() => authStore.isSuperAdmin)
 
 // 颜色调色板
 const catColors = ['#409EFF','#67C23A','#00C9A7','#E6A23C','#9B59B6','#F56C6C','#2196F3','#FF9800','#795548','#607D8B']
@@ -333,14 +269,10 @@ const borrowDialog = reactive({
   form: { borrower: '', quantity: 1, purpose: '', expectedReturnTime: null }
 })
 
-const batchDialog = reactive({
-  visible: false, saving: false,
-  borrower: '', purpose: '', expectedReturnTime: null,
-  items: []
-})
-
-const totalBatchQty = computed(() => {
-  return batchDialog.items.reduce((sum, item) => sum + (item.quantity || 0), 0)
+// 库存流水弹窗
+const logDialog = reactive({
+  visible: false, loading: false,
+  material: null, list: [], page: 1, size: 8, total: 0
 })
 
 function categoryLabel(catCode) {
@@ -357,10 +289,12 @@ function isLowStock(row) {
   const threshold = row.warningThreshold || 3
   return row.availableQuantity <= threshold
 }
-function checkSelectable(row) {
-  return row.availableQuantity > 0
+// 消耗型物资（耗材/水/试剂）：领用后直接核销，无需归还
+function isConsumable(row) {
+  const cat = categories.value.find(c => c.code === row.category)
+  return cat ? !cat.returnable : true
 }
-// 可归还型（设备/玻璃器皿）不可直接借用，需走预约；消耗型可直接借用
+// 可归还型（设备/玻璃器皿）不可直接借用，需走预约；消耗型可直接领用
 function isBorrowable(row) {
   const cat = categories.value.find(c => c.code === row.category)
   return cat ? !cat.returnable : true
@@ -368,11 +302,6 @@ function isBorrowable(row) {
 // 跳转到预约管理页并预选设备
 function goReserve(row) {
   router.push({ path: '/reservation', query: { materialId: row.id, materialName: row.name } })
-}
-
-function handleSelectionChange(selection) {
-  checkedItems.value = selection
-  checkedIds.value = selection.map(s => s.id)
 }
 
 function loadData() {
@@ -422,8 +351,9 @@ function showBorrowDialog(row) {
 }
 
 function handleBorrow() {
-  if (!borrowDialog.form.borrower) { ElMessage.warning('请输入借用人'); return }
-  if (borrowDialog.form.quantity < 1) { ElMessage.warning('借用数量至少为1'); return }
+  const isConsume = isConsumable(borrowDialog.material)
+  if (!borrowDialog.form.borrower) { ElMessage.warning(isConsume ? '请输入领用人' : '请输入借用人'); return }
+  if (borrowDialog.form.quantity < 1) { ElMessage.warning('数量至少为1'); return }
 
   borrowDialog.saving = true
   borrowApi.borrow({
@@ -435,91 +365,69 @@ function handleBorrow() {
       ? new Date(borrowDialog.form.expectedReturnTime).toISOString().replace('Z', '')
       : null
   }).then(() => {
-    ElMessage.success('申请已提交，等待审批')
+    ElMessage.success(isConsume ? '领用申请已提交，等待审批' : '借用申请已提交，等待审批')
     borrowDialog.visible = false
     loadData()
   }).catch(e => ElMessage.error(e.message))
     .finally(() => borrowDialog.saving = false)
 }
 
-// ==== 批量借用 ====
-function showBatchDialog() {
-  if (checkedItems.value.length === 0) {
-    ElMessage.warning('请先勾选需要借用的物资')
-    return
-  }
-  batchDialog.visible = true
-  batchDialog.borrower = currentUser.value.realName || ''
-  batchDialog.purpose = ''
-  batchDialog.expectedReturnTime = null
-  batchDialog.items = checkedItems.value.map(item => ({
-    ...item,
-    quantity: 1,
-    purpose: ''
-  }))
+// ==== 库存流水 ====
+function logTypeLabel(t) {
+  const map = { IN: '入库', OUT_BORROW: '借出', RETURN: '归还', CONSUME: '领用', ADJUST: '调整' }
+  return map[t] || t
+}
+function logTypeTag(t) {
+  const map = { IN: 'success', OUT_BORROW: 'warning', RETURN: 'success', CONSUME: 'info', ADJUST: 'danger' }
+  return map[t] || 'info'
+}
+function formatTime(t) {
+  if (!t) return '-'
+  const d = new Date(t)
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+function showLogs(row) {
+  logDialog.material = row
+  logDialog.page = 1
+  logDialog.list = []
+  logDialog.total = 0
+  logDialog.visible = true
+  loadLogs()
+}
+function loadLogs() {
+  if (!logDialog.material) return
+  logDialog.loading = true
+  materialApi.logs(logDialog.material.id, { page: logDialog.page, size: logDialog.size })
+    .then(data => {
+      logDialog.list = data.content || []
+      logDialog.total = data.totalElements || 0
+    })
+    .catch(e => ElMessage.error('流水加载失败：' + e.message))
+    .finally(() => logDialog.loading = false)
 }
 
-function syncBorrower() {
-  // 借用人统一填写后不需要同步到每行（借用人统一即可）
+// ==== Excel 导入导出 ====
+function handleExport() {
+  excelApi.exportMaterials({ keyword: search.keyword, category: search.category })
+    .then(() => ElMessage.success('导出成功'))
+    .catch(e => ElMessage.error(e.message))
 }
-
-function syncPurpose() {
-  batchDialog.items.forEach(item => {
-    item.purpose = batchDialog.purpose
-  })
+function triggerImport() {
+  fileInput.value.click()
 }
-
-function syncReturnTime() {
-  // 预计归还时间在提交时统一处理
-}
-
-function removeBatchItem(index) {
-  batchDialog.items.splice(index, 1)
-  if (batchDialog.items.length === 0) {
-    batchDialog.visible = false
-    ElMessage.info('已清空批量借用列表')
-  }
-}
-
-function handleBatchBorrow() {
-  if (!batchDialog.borrower) { ElMessage.warning('请输入借用人姓名'); return }
-  if (batchDialog.items.length === 0) { ElMessage.warning('借用列表为空'); return }
-
-  // 校验每个物资
-  for (const item of batchDialog.items) {
-    if (!item.quantity || item.quantity < 1) {
-      ElMessage.warning('「' + item.name + '」借用数量至少为1')
-      return
-    }
-    if (item.quantity > item.availableQuantity) {
-      ElMessage.warning('「' + item.name + '」库存不足，最多可借 ' + item.availableQuantity)
-      return
-    }
-  }
-
-  // 构建请求
-  const requests = batchDialog.items.map(item => ({
-    materialId: item.id,
-    materialName: item.name,
-    borrower: batchDialog.borrower,
-    quantity: item.quantity,
-    purpose: item.purpose || batchDialog.purpose,
-    expectedReturnTime: batchDialog.expectedReturnTime
-      ? new Date(batchDialog.expectedReturnTime).toISOString().replace('Z', '')
-      : null
-  }))
-
-  batchDialog.saving = true
-  borrowApi.batchBorrow(requests).then(() => {
-    ElMessage.success(`批量借用成功，共 ${requests.length} 种物资`)
-    batchDialog.visible = false
-    // 清空选中
-    if (tableRef.value) tableRef.value.clearSelection()
-    checkedIds.value = []
-    checkedItems.value = []
-    loadData()
-  }).catch(e => ElMessage.error(e.message))
-    .finally(() => batchDialog.saving = false)
+function handleImport(e) {
+  const file = e.target.files && e.target.files[0]
+  if (!file) return
+  excelApi.importMaterials(file)
+    .then(msg => {
+      // 后端返回 "导入完成：成功 N 条，失败 M 条\n第X行：..."
+      ElMessageBox.alert(msg, '导入结果', { confirmButtonText: '知道了' })
+        .then(() => loadData())
+        .catch(() => {})
+    })
+    .catch(err => ElMessage.error(err.message))
+    .finally(() => { e.target.value = '' })
 }
 
 // ==== CRUD ====

@@ -135,10 +135,11 @@ import { computed, ref, reactive, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  DataBoard, Box, Tickets, TrendCharts, Timer,
+  DataBoard, Box, Tickets, TrendCharts, Timer, ShoppingCart,
   ArrowDown, User, Switch, Bell, Setting, Document, Checked
 } from '@element-plus/icons-vue'
 import { notificationApi, authApi } from '../api'
+import { authStore } from '../stores/auth'
 
 const route = useRoute()
 const router = useRouter()
@@ -162,6 +163,7 @@ const tabs = computed(() => {
     // 管理员：全部功能
     return [
       ...base,
+      { label: '采购入库', path: '/stock-in', icon: ShoppingCart },
       { label: '预约管理', path: '/reservation', icon: Timer },
       { label: '统计报表', path: '/report', icon: TrendCharts },
       { label: '审批管理', path: '/approval', icon: Checked, badge: pendingCount.value, badgeType: 'danger' },
@@ -171,6 +173,7 @@ const tabs = computed(() => {
     // 教师：审批为核心
     return [
       ...base,
+      { label: '采购入库', path: '/stock-in', icon: ShoppingCart },
       { label: '审批管理', path: '/approval', icon: Checked, badge: pendingCount.value, badgeType: 'danger' },
       { label: '统计报表', path: '/report', icon: TrendCharts },
     ]
@@ -186,12 +189,8 @@ const currentPath = computed(() => route.path)
 
 const today = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })
 
-// 用户信息
-const currentUser = computed(() => {
-  const userStr = localStorage.getItem('user')
-  if (!userStr) return null
-  try { return JSON.parse(userStr) } catch { return null }
-})
+// 用户信息 — 以 authStore 为准
+const currentUser = computed(() => authStore.userInfo)
 
 const userInitial = computed(() => {
   return currentUser.value ? currentUser.value.realName.charAt(0) : '?'
@@ -277,8 +276,7 @@ const handleCommand = (cmd) => {
     passwordForm.confirmPassword = ''
     infoDialog.value = true
   } else if (cmd === 'switchAccount') {
-    localStorage.removeItem('user')
-    localStorage.removeItem('token')
+    authStore.clear()
     ElMessage.success('已切换账号，请重新登录')
     router.push('/login')
   }
@@ -297,7 +295,12 @@ function handleSaveProfile() {
   profileSaving.value = true
   authApi.updateProfile({ realName: profileForm.realName, phone: profileForm.phone })
     .then(data => {
-      // 更新 localStorage 中的用户信息
+      // 更新 authStore 中的用户信息
+      if (authStore.state.user) {
+        authStore.state.user.realName = data.realName
+        authStore.state.user.phone = data.phone
+      }
+      // 同步 localStorage（用于跨标签页恢复）
       const user = JSON.parse(localStorage.getItem('user') || '{}')
       user.realName = data.realName
       user.phone = data.phone
@@ -322,10 +325,8 @@ function handleChangePassword() {
     oldPassword: passwordForm.oldPassword,
     newPassword: passwordForm.newPassword
   }).then(() => {
-    ElMessage.success('密码已修改')
-    // 重新登录
-    localStorage.removeItem('user')
-    localStorage.removeItem('token')
+    ElMessage.success('密码已修改，请重新登录')
+    authStore.clear()
     setTimeout(() => router.push('/login'), 1000)
   }).catch(e => ElMessage.error(e.message))
     .finally(() => passwordSaving.value = false)

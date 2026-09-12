@@ -101,9 +101,10 @@ function loadData() {
   loading.value = true
   Promise.all([
     materialApi.list({}),
-    borrowApi.list({}),
+    borrowApi.list({ size: 10000 }), // /api/borrow 是分页接口，取全量记录用于统计
     categoryApi.list()
-  ]).then(([materials, records, cats]) => {
+  ]).then(([materials, borrowPage, cats]) => {
+    const records = (borrowPage && borrowPage.content) || []
     categories.value = cats || []
     categoryMap.value = categories.value.map((c, i) => ({
       key: c.code,

@@ -3,6 +3,8 @@ package com.example.borrow.controller;
 import com.example.borrow.entity.BorrowRecord;
 import com.example.borrow.service.BorrowService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
@@ -27,12 +29,6 @@ public class BorrowController {
                 request.getMaterialId(), request.getBorrower(),
                 request.getQuantity(), request.getPurpose(), expectedReturn);
         return Result.ok(record);
-    }
-
-    /** 批量借用申请 */
-    @PostMapping("/batch")
-    public Result<?> batchBorrow(@RequestBody List<BatchBorrowRequest> requests) {
-        return Result.fail("批量借用需逐个走审批流程，已禁用");
     }
 
     /** 审批通过 */
@@ -86,11 +82,20 @@ public class BorrowController {
         return Result.ok(result);
     }
 
-    /** 记录列表 */
+    /** 记录列表（分页） */
     @GetMapping
     public Result<?> list(@RequestParam(required = false) String status,
-                          @RequestParam(required = false) String keyword) {
-        return Result.ok(borrowService.list(status, keyword));
+                          @RequestParam(required = false) String keyword,
+                          @RequestParam(defaultValue = "1") int page,
+                          @RequestParam(defaultValue = "10") int size) {
+        Page<BorrowRecord> result = borrowService.list(status, keyword, PageRequest.of(page - 1, size));
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put("content", result.getContent());
+        data.put("totalElements", result.getTotalElements());
+        data.put("totalPages", result.getTotalPages());
+        data.put("page", page);
+        data.put("size", size);
+        return Result.ok(data);
     }
 
     /** 待审批列表（教师用） */
@@ -131,22 +136,5 @@ public class BorrowController {
         public void setIsDamaged(Boolean isDamaged) { this.isDamaged = isDamaged; }
         public String getDamageDescription() { return damageDescription; }
         public void setDamageDescription(String damageDescription) { this.damageDescription = damageDescription; }
-    }
-
-    static class BatchBorrowRequest {
-        private Long materialId; private String materialName; private String borrower;
-        private Integer quantity; private String purpose; private String expectedReturnTime;
-        public Long getMaterialId() { return materialId; }
-        public void setMaterialId(Long materialId) { this.materialId = materialId; }
-        public String getMaterialName() { return materialName; }
-        public void setMaterialName(String materialName) { this.materialName = materialName; }
-        public String getBorrower() { return borrower; }
-        public void setBorrower(String borrower) { this.borrower = borrower; }
-        public Integer getQuantity() { return quantity; }
-        public void setQuantity(Integer quantity) { this.quantity = quantity; }
-        public String getPurpose() { return purpose; }
-        public void setPurpose(String purpose) { this.purpose = purpose; }
-        public String getExpectedReturnTime() { return expectedReturnTime; }
-        public void setExpectedReturnTime(String expectedReturnTime) { this.expectedReturnTime = expectedReturnTime; }
     }
 }

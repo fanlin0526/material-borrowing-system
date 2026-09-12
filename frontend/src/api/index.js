@@ -53,16 +53,60 @@ export const materialApi = {
   update: (id, data) => api.put('/material/' + id, data),
   delete: (id) => api.delete('/material/' + id),
   stats: () => api.get('/material/stats'),
-  lowStock: () => api.get('/material/low-stock')
+  lowStock: () => api.get('/material/low-stock'),
+  logs: (id, params) => api.get('/material/' + id + '/logs', { params })
 }
 
 // ====== 借用 API ======
 export const borrowApi = {
   list: (params) => api.get('/borrow', { params }),
   borrow: (data) => api.post('/borrow', data),
-  batchBorrow: (data) => api.post('/borrow/batch', data),
   return: (recordId, data) => api.put('/borrow/return/' + recordId, data),
   stats: () => api.get('/borrow/stats')
+}
+
+// ====== 采购入库 API ======
+export const stockInApi = {
+  list: (params) => api.get('/stock-in', { params }),
+  detail: (id) => api.get('/stock-in/' + id),
+  create: (data) => api.post('/stock-in', data)
+}
+
+// ====== Excel 导入导出 API ======
+// 导出走原生 fetch（blob 下载，绕开 JSON 拦截器）
+async function downloadFile(url, fallbackName) {
+  const token = localStorage.getItem('token')
+  const res = await fetch(url, { headers: token ? { Authorization: 'Bearer ' + token } : {} })
+  if (!res.ok) throw new Error('导出失败（HTTP ' + res.status + '）')
+  const blob = await res.blob()
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = fallbackName
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(a.href)
+}
+const nowStr = () => {
+  const d = new Date()
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+}
+export const excelApi = {
+  exportMaterials: (params) => downloadFile('/api/export/materials' + toQuery(params), `物资清单_${nowStr()}.xlsx`),
+  exportBorrows: (params) => downloadFile('/api/export/borrows' + toQuery(params), `借用记录_${nowStr()}.xlsx`),
+  importMaterials: (file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return api.post('/import/materials', fd)
+  }
+}
+function toQuery(params) {
+  if (!params) return ''
+  const qs = new URLSearchParams()
+  Object.entries(params).forEach(([k, v]) => { if (v) qs.append(k, v) })
+  const s = qs.toString()
+  return s ? '?' + s : ''
 }
 
 // ====== 通知 API ======

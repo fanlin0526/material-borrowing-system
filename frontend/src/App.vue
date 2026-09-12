@@ -142,6 +142,7 @@ import { computed, ref, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { DataBoard, Box, Tickets, TrendCharts, Timer, Calendar, ArrowDown, User, Switch, Setting, Document, Checked } from '@element-plus/icons-vue'
 import AdminLayout from './layouts/AdminLayout.vue'
+import { authStore } from './stores/auth'
 
 const route = useRoute()
 const router = useRouter()
@@ -162,31 +163,10 @@ const currentTitle = computed(() => titleMap[route.path] || '实验室物资借�
 
 const today = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })
 
-// 响应式用户信息 - 监听 storage 事件
-const currentUser = ref(null)
-const isAdmin = computed(() =>
-  currentUser.value?.role === 'SUPER_ADMIN' || currentUser.value?.role === 'TEACHER'
-)
-const isSuperAdmin = computed(() => currentUser.value?.role === 'SUPER_ADMIN')
-
-function loadUser() {
-  const userStr = localStorage.getItem('user')
-  if (!userStr) {
-    currentUser.value = null
-    return
-  }
-  try {
-    currentUser.value = JSON.parse(userStr)
-  } catch {
-    currentUser.value = null
-  }
-}
-
-// 初始化 + 监听跨标签页登录变化
-loadUser()
-window.addEventListener('storage', loadUser)
-// 每次路由变化时重新读取用户信息
-watch(() => route.path, loadUser)
+// 响应式用户信息 — 以 authStore 为准
+const currentUser = computed(() => authStore.userInfo)
+const isAdmin = computed(() => authStore.isAdmin)
+const isSuperAdmin = computed(() => authStore.isSuperAdmin)
 
 const roleLabel = (role) => {
   const map = { SUPER_ADMIN: '超级管理员', TEACHER: '教师', STUDENT: '学生' }
@@ -202,8 +182,7 @@ const handleCommand = (cmd) => {
   if (cmd === 'info') {
     infoDialog.value = true
   } else if (cmd === 'switchAccount') {
-    localStorage.removeItem('user')
-    currentUser.value = null
+    authStore.clear()
     ElMessage.success('已切换账号，请重新登录')
     router.push('/login')
   }

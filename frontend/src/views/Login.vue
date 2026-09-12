@@ -204,6 +204,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock, UserFilled } from '@element-plus/icons-vue'
 import { authApi } from '../api'
+import { authStore } from '../stores/auth'
 
 const router = useRouter()
 const formRef = ref()
@@ -271,24 +272,21 @@ const handleSubmit = async () => {
       ElMessage.success('登录成功')
     }
 
-    // 存储用户信息
+    // 通过 authStore 存储用户信息（角色以服务端返回为准）
     const userInfo = {
       id: res.id,
       username: res.username,
       realName: res.realName,
       role: res.role,
-      token: res.token
+      phone: res.phone,
+      avatar: res.avatar,
     }
-    localStorage.setItem('user', JSON.stringify(userInfo))
-    localStorage.setItem('token', res.token)  // JWT 单独存储
+    authStore.setUser(userInfo, res.token)
     if (rememberMe.value) {
       localStorage.setItem('rememberUser', form.username)
     } else {
       localStorage.removeItem('rememberUser')
     }
-
-    // 触发 storage 事件让 App.vue 同步用户状态
-    window.dispatchEvent(new Event('storage'))
 
     // 跳转
     router.push('/dashboard')
