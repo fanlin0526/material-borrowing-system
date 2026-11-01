@@ -1,3 +1,4 @@
+#顶部 Tab「预约管理」#
 <template>
   <div>
     <!-- 周切换栏 -->
@@ -28,6 +29,10 @@
       </div>
     </el-card>
 
+    <!-- 流程说明 -->
+    <el-alert type="info" :closable="false" show-icon style="margin-bottom: 16px"
+      title="预约流程：提交预约申请 → 教师/管理员审批 → 通过后自动生成借用单 → 使用完在「借用记录」中归还" />
+
     <!-- 周视图表格 -->
     <el-card v-loading="loading">
       <div class="week-grid">
@@ -48,7 +53,7 @@
               :style="slotStyle(slot)"
               @click.stop="showResvDetail(slot)"
             >
-              {{ slot.materialName }}
+              {{ slot.materialName }}{{ slot.status === 'PENDING' ? '（待审批）' : '' }}
             </div>
           </div>
         </template>
@@ -61,7 +66,8 @@
         <el-form-item label="选择设备" required>
           <el-select v-model="dialog.form.materialId" placeholder="搜索设备" filterable style="width: 100%"
             @change="onDeviceChange">
-            <el-option v-for="m in availableDevices" :key="m.id" :label="m.name + ' (' + (m.availableQuantity || 0) + '台可用)'"
+            <el-option v-for="m in availableDevices" :key="m.id"
+              :label="m.name + ' (' + (m.availableQuantity || 0) + (m.unit || '台') + '可用)'"
               :value="m.id" :disabled="m.deviceStatus !== 'AVAILABLE'" />
           </el-select>
         </el-form-item>
@@ -74,10 +80,10 @@
         </el-form-item>
         <el-form-item label="时间段" required>
           <el-time-select v-model="dialog.form.startTime" placeholder="开始时间" start="07:00" end="21:00" step="00:30"
-            style="width: 140px" @change="checkConflictDebounced" />
+            :min-time="minStartTime" style="width: 140px" @change="checkConflictDebounced" />
           <span style="margin: 0 10px; color: #909399">至</span>
           <el-time-select v-model="dialog.form.endTime" placeholder="结束时间" start="07:00" end="21:00" step="00:30"
-            style="width: 140px" @change="checkConflictDebounced" />
+            :min-time="minEndTime" style="width: 140px" @change="checkConflictDebounced" />
         </el-form-item>
         <el-form-item label="预约模式" required>
           <el-radio-group v-model="dialog.form.mode" @change="resetConflict">
@@ -100,21 +106,33 @@
           <el-input v-model="dialog.form.purpose" type="textarea" :rows="2" placeholder="实验项目名称或用途" />
         </el-form-item>
 
-        <!-- 冲突提示 -->
-        <el-alert v-if="conflict.hasConflict" title="时段冲突" type="error" :closable="false" show-icon style="margin: 0 0 16px 100px">
-          <template #default>
-            <div v-for="(c, i) in conflict.conflicts" :key="i" style="margin-bottom: 4px">
-              已被「{{ c.reservedBy }}」占用（{{ formatConflictTime(c) }}）
-            </div>
-          </template>
-        </el-alert>
-        <el-alert v-if="conflict.checked && !conflict.hasConflict" title="该时段空闲，可预约" type="success" :closable="false"
-          show-icon style="margin: 0 0 16px 100px" />
+        <!-- 冲突提示：左缩进对齐输入框。注意必须靠外层容器撑宽度——
+             el-alert 自带 width:100%，若直接在它身上写 margin-left:100px，
+             元素宽度仍是父容器整宽，整体会向右溢出弹窗 100px。 -->
+        <div class="dialog-alert">
+          <el-alert v-if="conflict.hasConflict" title="时段冲突" type="error" :closable="false" show-icon>
+            <template #default>
+              <div v-for="(c, i) in conflict.conflicts" :key="i" style="margin-bottom: 4px">
+                已被「{{ c.reservedBy }}」占用（{{ formatConflictTime(c) }}）{{ c.status === 'PENDING' ? ' · 待审批' : '' }}
+              </div>
+            </template>
+          </el-alert>
+          <el-alert v-if="conflict.checked && !conflict.hasConflict" title="该时段空闲，可预约" type="success"
+            :closable="false" show-icon />
+          <!-- 在借提示：直接借用通道的占用不落在预约时段上，时段空闲也可能拿不到实物 -->
+          <el-alert v-if="conflict.borrowedOutQuantity > 0" type="warning" :closable="false" show-icon>
+            <template #title>
+              该设备有 {{ conflict.borrowedOutQuantity }} 件已被借出且尚未归还<template
+                v-if="conflict.earliestReturnTime">，最早预计 {{ formatReturnTime(conflict.earliestReturnTime) }} 归还</template>。
+              时段空闲不代表到时有实物在手，请确认剩余数量够用；急用可改用「借用」直接申请。
+            </template>
+          </el-alert>
+        </div>
       </el-form>
       <template #footer>
         <el-button @click="dialog.visible = false">取消</el-button>
         <el-button type="primary" @click="handleCreate" :loading="dialog.saving"
-          :disabled="conflict.hasConflict">确认预约</el-button>
+          :disabled="conflict.hasConflict">提交预约申请</el-button>
       </template>
     </el-dialog>
 
@@ -132,14 +150,24 @@
         <el-descriptions-item label="时间">{{ detailDialog.record.timeRange || '-' }}</el-descriptions-item>
         <el-descriptions-item label="用途">{{ detailDialog.record.purpose || '-' }}</el-descriptions-item>
         <el-descriptions-item label="状态">
-          <el-tag :type="detailDialog.record.status === 'CANCELLED' ? 'danger' : 'success'" size="small">
-            {{ detailDialog.record.status === 'CANCELLED' ? '已取消' : '已预约' }}
+          <el-tag :type="resStatusTag(detailDialog.record.status)" size="small">
+            {{ resStatusLabel(detailDialog.record.status) }}
           </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item v-if="detailDialog.record.approver" label="审批人">
+          {{ detailDialog.record.approver }}
+        </el-descriptions-item>
+        <el-descriptions-item v-if="detailDialog.record.rejectReason"
+                              :label="detailDialog.record.status === 'CANCELLED' ? '作废原因' : '拒绝原因'">
+          {{ detailDialog.record.rejectReason }}
+        </el-descriptions-item>
+        <el-descriptions-item v-if="detailDialog.record.borrowRecordId" label="关联借用单">
+          已生成借用单 #{{ detailDialog.record.borrowRecordId }}，请在「借用记录」中归还
         </el-descriptions-item>
       </el-descriptions>
       <template #footer>
         <el-button @click="detailDialog.visible = false">关闭</el-button>
-        <el-button v-if="detailDialog.record && detailDialog.record.status !== 'CANCELLED' && (detailDialog.record.isMine || isAdmin)"
+        <el-button v-if="detailDialog.record && detailDialog.record.status === 'PENDING' && (detailDialog.record.isMine || isAdmin)"
           type="danger" @click="cancelReservation" :loading="detailDialog.cancelling">
           取消预约
         </el-button>
@@ -173,7 +201,9 @@ const categories = [
 ]
 const deviceFilter = ref('DEVICE')
 
-const hours = Array.from({ length: 15 }, (_, i) => i + 7) // 7:00 ~ 21:00
+// 时间行：每行代表半小时槽的整点起点。可预约窗口是 7:00-21:00，
+// 故最后一行取 20:00（20:00-21:00），再往后的 21:00 行没有合法结束时间（结束必须晚于开始）
+const hours = Array.from({ length: 14 }, (_, i) => i + 7) // 7:00 ~ 20:00
 const weekDays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 const colors = ['#409EFF', '#67C23A', '#E6A23C', '#9B59B6', '#00C9A7', '#F56C6C']
 
@@ -268,8 +298,34 @@ function getSlots(dayOffset, hour) {
   return slots
 }
 
+/** 预约状态：PENDING-待审批，APPROVED-已通过，COMPLETED-已完成，REJECTED/CANCELLED */
+function resStatusLabel(s) {
+  const map = { PENDING: '待审批', APPROVED: '已通过', COMPLETED: '已完成', REJECTED: '已拒绝', CANCELLED: '已取消' }
+  return map[s] || (s || '-')
+}
+function resStatusTag(s) {
+  const map = { PENDING: 'warning', APPROVED: 'success', COMPLETED: 'info', REJECTED: 'danger', CANCELLED: 'info' }
+  return map[s] || 'info'
+}
+
 function slotStyle(slot) {
   const idx = slot.materialId % colors.length
+  // 待审批：浅色 + 虚线边框，与已通过的实色区分
+  if (slot.status === 'PENDING') {
+    return {
+      background: '#fff7e6',
+      color: '#b88230',
+      border: '1px dashed #e6a23c',
+      fontSize: '11px',
+      padding: '2px 6px',
+      borderRadius: '4px',
+      marginBottom: '2px',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+      cursor: 'pointer'
+    }
+  }
   return {
     background: slot._conflict ? '#F56C6C' : colors[idx],
     color: '#fff',
@@ -314,8 +370,27 @@ function deviceStatusTag(s) {
   return map[s] || 'success'
 }
 
+/** 可预约时段常量（与模板里 el-time-select 的 start/end/step 保持一致） */
+const SLOT_START = '07:00'
+const SLOT_END = '21:00'
+const SLOT_STEP = 30
+
+function fmtHM(mins) {
+  return String(Math.floor(mins / 60)).padStart(2, '0') + ':' + String(mins % 60).padStart(2, '0')
+}
+
+/** 今天是否已过营业结束时间（过了则今天整天不可约） */
+function todayExhausted() {
+  const now = new Date()
+  return now.getHours() * 60 + now.getMinutes() >= 21 * 60
+}
+
+/** 过去日期不可选；今天若已过 21:00 也不可选 */
 function disabledDate(time) {
-  return time.getTime() < Date.now() - 86400000
+  const todayStart = new Date()
+  todayStart.setHours(0, 0, 0, 0)
+  if (time.getTime() < todayStart.getTime()) return true
+  return time.toDateString() === new Date().toDateString() && todayExhausted()
 }
 
 // 创建预约弹窗
@@ -324,7 +399,35 @@ const dialog = reactive({
   form: { materialId: null, realName: '', date: null, startTime: null, endTime: null,
     mode: 'SINGLE', recurringRule: 'WEEKLY', weeks: 4, purpose: '' }
 })
-const conflict = reactive({ checked: false, hasConflict: false, conflicts: [] })
+const conflict = reactive({
+  checked: false, hasConflict: false, conflicts: [],
+  // 该设备被「直接借用」通道借走且尚未归还的数量 / 最早归还时间
+  // （这类占用不落在预约时段上，时段冲突检测查不到，但实物已不在库）
+  borrowedOutCount: 0, borrowedOutQuantity: 0, earliestReturnTime: null
+})
+
+/**
+ * 开始时间的可选下限：选「今天」时把当前时刻向上取整到 30 分钟，
+ * 已过去的时刻直接不可选 —— 避免第一眼没看清时间就点错。
+ */
+const minStartTime = computed(() => {
+  const d = dialog.form.date
+  if (!d) return SLOT_START
+  const sel = new Date(d)
+  if (sel.toDateString() !== new Date().toDateString()) return SLOT_START
+  const now = new Date()
+  const mins = Math.ceil((now.getHours() * 60 + now.getMinutes()) / SLOT_STEP) * SLOT_STEP
+  if (mins > 21 * 60) return SLOT_END
+  return fmtHM(mins)
+})
+
+/** 结束时间下限：至少比开始时间晚一个步长 */
+const minEndTime = computed(() => {
+  const st = dialog.form.startTime
+  if (!st) return minStartTime.value
+  const [h, m] = st.split(':').map(Number)
+  return fmtHM(Math.min(h * 60 + m + SLOT_STEP, 21 * 60))
+})
 
 let conflictTimer = null
 function checkConflictDebounced() {
@@ -354,6 +457,9 @@ function checkConflict() {
     conflict.checked = true
     conflict.hasConflict = data.hasConflict
     conflict.conflicts = data.conflicts || []
+    conflict.borrowedOutCount = data.borrowedOutCount || 0
+    conflict.borrowedOutQuantity = data.borrowedOutQuantity || 0
+    conflict.earliestReturnTime = data.earliestReturnTime || null
   }).catch(() => { conflict.checked = false })
 }
 
@@ -361,6 +467,9 @@ function resetConflict() {
   conflict.checked = false
   conflict.hasConflict = false
   conflict.conflicts = []
+  conflict.borrowedOutCount = 0
+  conflict.borrowedOutQuantity = 0
+  conflict.earliestReturnTime = null
 }
 
 function onDeviceChange() {
@@ -406,18 +515,26 @@ function showCreateWithDevice(device) {
   dialog.form.startTime = null
   dialog.form.endTime = null
   dialog.form.mode = 'SINGLE'
+  dialog.form.purpose = ''   // 从物资管理跳转进来时不带上次的用途说明
   resetConflict()
   dialog.visible = true
 }
 
 function showQuickCreate(dayOffset, hour) {
   const dayDate = getDayDate(dayOffset)
+  // 周视图里点历史格子：直接给提示，避免带着一个已过去的时段进弹窗
+  const slotStart = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate(), hour, 0, 0)
+  if (slotStart.getTime() <= Date.now()) {
+    ElMessage.warning('该时段已经过去，请选择未来的时段')
+    return
+  }
   dialog.form = {
     materialId: null,
     realName: currentUser.value.realName || '',
     date: new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate()),
     startTime: `${String(hour).padStart(2, '0')}:00`,
-    endTime: `${String(hour + 1).padStart(2, '0')}:00`,
+    // 结束时间不能超出可预约窗口 21:00
+    endTime: `${String(Math.min(hour + 1, 21)).padStart(2, '0')}:00`,
     mode: 'SINGLE', recurringRule: 'WEEKLY', weeks: 4, purpose: ''
   }
   resetConflict()
@@ -429,6 +546,12 @@ function formatConflictTime(c) {
   return `${s.getMonth() + 1}/${s.getDate()} ${String(s.getHours()).padStart(2, '0')}:${String(s.getMinutes()).padStart(2, '0')} ~ ${String(e.getHours()).padStart(2, '0')}:${String(e.getMinutes()).padStart(2, '0')}`
 }
 
+/** 在借设备的预计归还时间（月日 时分） */
+function formatReturnTime(t) {
+  const d = new Date(t)
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
 function handleCreate() {
   const { materialId, realName, date, startTime, endTime, mode, recurringRule, weeks, purpose } = dialog.form
   if (!materialId) { ElMessage.warning('请选择设备'); return }
@@ -438,6 +561,16 @@ function handleCreate() {
   const d = new Date(date)
   const s = new Date(d.getFullYear(), d.getMonth(), d.getDate(), parseInt(startTime.split(':')[0]), parseInt(startTime.split(':')[1]))
   const e = new Date(d.getFullYear(), d.getMonth(), d.getDate(), parseInt(endTime.split(':')[0]), parseInt(endTime.split(':')[1]))
+
+  // 兜底：日期与时刻组件已限制过去时间，这里再拦一道
+  if (s.getTime() <= Date.now()) {
+    ElMessage.warning('预约开始时间不能早于当前时间，请重新选择')
+    return
+  }
+  if (e.getTime() <= s.getTime()) {
+    ElMessage.warning('结束时间必须晚于开始时间')
+    return
+  }
 
   const baseData = {
     materialId, username: currentUser.value.username || realName,
@@ -460,7 +593,9 @@ function handleCreate() {
   }
 
   apiCall.then(() => {
-    ElMessage.success(mode === 'RECURRING' ? `周期预约成功（共 ${weeks} 次）` : '预约成功')
+    ElMessage.success(mode === 'RECURRING'
+      ? `已提交 ${weeks} 次周期预约申请，等待教师审批`
+      : '预约申请已提交，等待教师审批')
     dialog.visible = false
     loadWeek()
   }).catch(e => ElMessage.error(e.message))
@@ -490,6 +625,15 @@ onMounted(() => {
 
 <style scoped>
 .card-title { font-size: 15px; font-weight: 600; color: #303133; }
+
+/* 新建预约弹窗里的提示块：左缩进与输入框对齐（label-width 100px），
+   宽度由本容器撑开，避免 el-alert 的 width:100% 叠加左外边距后溢出弹窗 */
+.dialog-alert {
+  margin: 0 0 16px 100px;
+}
+.dialog-alert > .el-alert + .el-alert {
+  margin-top: 8px;
+}
 
 /* 周视图网格 */
 .week-grid {

@@ -3,6 +3,7 @@ package com.example.borrow.controller;
 import com.example.borrow.entity.OperationLog;
 import com.example.borrow.entity.SystemConfig;
 import com.example.borrow.entity.User;
+import com.example.borrow.repository.BorrowRecordRepository;
 import com.example.borrow.repository.OperationLogRepository;
 import com.example.borrow.repository.SystemConfigRepository;
 import com.example.borrow.repository.UserRepository;
@@ -21,6 +22,7 @@ import java.util.Map;
 public class AdminController {
 
     @Autowired private UserRepository userRepository;
+    @Autowired private BorrowRecordRepository borrowRecordRepository;
     @Autowired private SystemConfigRepository systemConfigRepository;
     @Autowired private OperationLogRepository operationLogRepository;
     @Autowired private PasswordEncoder passwordEncoder;
@@ -58,6 +60,13 @@ public class AdminController {
         user.setRealName(realName.trim());
         user.setRole(role);
         user.setPhone(phone);
+        user.setDepartment(body.get("department"));
+        user.setLabName(body.get("labName"));
+        user.setMentorName(body.get("mentorName"));
+        user.setCreditScore(100);
+        user.setEnabled(true);
+        // 管理员代开的账号用的是默认密码，首次登录强制改密
+        user.setPasswordChanged(false);
         userRepository.save(user);
         return Result.ok("创建成功");
     }
@@ -71,8 +80,46 @@ public class AdminController {
         if (body.containsKey("realName")) user.setRealName(body.get("realName"));
         if (body.containsKey("role")) user.setRole(body.get("role"));
         if (body.containsKey("phone")) user.setPhone(body.get("phone"));
+        if (body.containsKey("department")) user.setDepartment(body.get("department"));
+        if (body.containsKey("labName")) user.setLabName(body.get("labName"));
+        if (body.containsKey("mentorName")) user.setMentorName(body.get("mentorName"));
+        if (body.containsKey("creditScore")) {
+            try { user.setCreditScore(Integer.parseInt(body.get("creditScore"))); } catch (Exception ignored) {}
+        }
         userRepository.save(user);
         return Result.ok("更新成功");
+    }
+
+    /**
+     * 启用 / 停用账号（论文「调整用户角色、重置密码、停用或启用账号」）。
+     * 停用只是禁止登录与提交新业务，历史记录与操作日志全部保留。
+     */
+    @PutMapping("/users/{id}/status")
+    public Result<?> updateUserStatus(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        User user = userRepository.findById(id).orElse(null);
+        if (user == null) return Result.fail("用户不存在");
+        Object enabled = body.get("enabled");
+        if (enabled == null) return Result.fail("缺少参数 enabled");
+        boolean target = Boolean.parseBoolean(String.valueOf(enabled));
+        if (!target && "SUPER_ADMIN".equals(user.getRole())) {
+            return Result.fail("超级管理员账号不允许停用");
+        }
+        user.setEnabled(target);
+        userRepository.save(user);
+
+        try {
+            OperationLog log = new OperationLog();
+            log.setUsername(com.example.borrow.security.UserContext.getUsername());
+            log.setRealName(com.example.borrow.security.UserContext.getRealName());
+            log.setAction("USER_STATUS");
+            log.setDetail("账号「" + user.getRealName() + "（" + user.getUsername() + "）」"
+                    + (target ? "已启用" : "已停用"));
+            log.setTargetType("USER");
+            log.setTargetId(user.getId());
+            operationLogRepository.save(log);
+        } catch (Exception ignored) {}
+
+        return Result.ok(target ? "已启用" : "已停用");
     }
 
     /** 重置密码 */
@@ -81,14 +128,34 @@ public class AdminController {
         User user = userRepository.findById(id).orElse(null);
         if (user == null) return Result.fail("用户不存在");
         user.setPassword(passwordEncoder.encode("123456"));
+        // 重置为默认密码后，要求本人首次登录强制修改
+        user.setPasswordChanged(false);
         userRepository.save(user);
         return Result.ok("密码已重置为 123456");
     }
 
-    /** 删除用户 */
+    /**
+     * 删除用户。
+     * 论文口径：存在未归还借用记录的账号不允许删除，提示改为「停用」——
+     * 因为记录里存的是姓名，物理删人会留下查不到人的历史记录。
+     */
     @DeleteMapping("/users/{id}")
     public Result<?> deleteUser(@PathVariable Long id) {
-        if (!userRepository.existsById(id)) return Result.fail("用户不存在");
+        User user = userRepository.findById(id).orElse(null);
+        if (user == null) return Result.fail("用户不存在");
+        java.util.List<com.example.borrow.entity.BorrowRecord> mine =
+                borrowRecordRepository.findByBorrowerUsernameOrderByBorrowTimeDesc(user.getUsername());
+        if (mine.isEmpty() && user.getRealName() != null) {
+            // 兼容升级前只保存姓名的历史记录
+            mine = borrowRecordRepository.findByBorrowerContainingOrderByBorrowTimeDesc(user.getRealName());
+        }
+        long unfinished = mine.stream().filter(r -> java.util.Arrays.asList(
+                "PENDING", "BORROWED", "OVERDUE", "PENDING_EXTEND", "RETURNED_FOR_EDIT")
+                .contains(r.getStatus())).count();
+        if (unfinished > 0) {
+            return Result.fail("该用户还有 " + unfinished + " 条未完结的借用/延期记录，不能删除；"
+                    + "建议改用「停用账号」，历史记录可保留追溯。");
+        }
         userRepository.deleteById(id);
         return Result.ok("删除成功");
     }

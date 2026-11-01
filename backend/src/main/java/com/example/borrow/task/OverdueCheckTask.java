@@ -20,7 +20,7 @@ public class OverdueCheckTask {
     private NotificationService notificationService;
 
     /** 每小时检查一次逾期 */
-    @Scheduled(fixedRate = 3600000)
+    @Scheduled(fixedRate = 3600000, initialDelay = 60000)
     public void checkOverdue() {
         List<BorrowRecord> records = borrowRecordRepository.findByStatusOrderByBorrowTimeDesc("BORROWED");
         int overdueCount = 0;
@@ -33,7 +33,8 @@ public class OverdueCheckTask {
                     borrowRecordRepository.save(r);
                     overdueCount++;
                     // 发送逾期通知
-                    notificationService.send(r.getBorrower(),
+                    notificationService.send(r.getBorrowerUsername() != null
+                                    ? r.getBorrowerUsername() : r.getBorrower(),
                             "物资逾期提醒",
                             "您借用的「" + r.getMaterialName() + "」已于 "
                                     + r.getExpectedReturnTime().toLocalDate() + " 到期，请尽快归还。",

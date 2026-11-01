@@ -1,3 +1,4 @@
+#齿轮下拉「分类管理」#
 <template>
   <div>
     <el-card style="margin-bottom: 20px">
@@ -6,7 +7,7 @@
           <h3 style="margin: 0">分类管理</h3>
         </el-col>
         <el-col :span="12" style="text-align: right">
-          <el-button type="primary" @click="showAddDialog">
+          <el-button v-if="isSuperAdmin" type="primary" @click="showAddDialog">
             <el-icon style="margin-right: 4px"><Plus /></el-icon>新增分类
           </el-button>
         </el-col>
@@ -29,12 +30,15 @@
         <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
         <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" size="small" @click="showEditDialog(row)">编辑</el-button>
-            <el-popconfirm title="确定删除该分类？删除前请确保该分类下无物资。" @confirm="handleDelete(row.id)">
-              <template #reference>
-                <el-button type="danger" size="small">删除</el-button>
-              </template>
-            </el-popconfirm>
+            <template v-if="isSuperAdmin">
+              <el-button type="primary" size="small" @click="showEditDialog(row)">编辑</el-button>
+              <el-popconfirm title="确定删除该分类？删除前请确保该分类下无物资。" @confirm="handleDelete(row.id)">
+                <template #reference>
+                  <el-button type="danger" size="small">删除</el-button>
+                </template>
+              </el-popconfirm>
+            </template>
+            <el-tag v-else type="info" size="small" effect="plain">仅查看</el-tag>
           </template>
         </el-table-column>
       </el-table>
@@ -74,10 +78,14 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { categoryApi } from '../api'
+import { authStore } from '../stores/auth'
+
+// 分类是物资归类的基础口径，维护操作仅超级管理员可用（服务端同样有校验）
+const isSuperAdmin = computed(() => authStore.isSuperAdmin)
 
 const loading = ref(false)
 const tableData = ref([])

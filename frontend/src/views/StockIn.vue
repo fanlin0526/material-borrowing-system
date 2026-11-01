@@ -1,3 +1,4 @@
+#顶部 Tab「采购入库」#
 <template>
   <div>
     <!-- 操作栏 -->
@@ -12,7 +13,7 @@
           <el-button type="primary" @click="loadData">
             <el-icon style="margin-right: 4px"><Search /></el-icon>查询
           </el-button>
-          <el-button type="success" @click="showCreateDialog">
+          <el-button v-if="isAdmin" type="success" @click="showCreateDialog">
             <el-icon style="margin-right: 4px"><Plus /></el-icon>新建入库单
           </el-button>
         </el-col>
@@ -38,12 +39,34 @@
         <el-table-column prop="remark" label="备注" min-width="140" show-overflow-tooltip>
           <template #default="{ row }">{{ row.remark || '-' }}</template>
         </el-table-column>
+        <el-table-column label="状态" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag :type="isRevoked(row) ? 'danger' : 'success'" size="small" :effect="isRevoked(row) ? 'plain' : 'light'">
+              {{ isRevoked(row) ? '已撤销' : '正常' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="入库时间" width="160">
           <template #default="{ row }">{{ formatTime(row.createTime) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="90" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
             <el-button type="primary" size="small" plain @click="showDetail(row)">详情</el-button>
+            <template v-if="!isRevoked(row)">
+              <el-button type="warning" size="small" plain @click="showEditDialog(row)">编辑</el-button>
+              <el-popconfirm
+                title="撤销后会回退这单增加的库存，单据保留并标记为「已撤销」。确定撤销吗？"
+                confirm-button-text="确定撤销"
+                cancel-button-text="取消"
+                width="260"
+                @confirm="handleRevoke(row)"
+              >
+                <template #reference>
+                  <el-button type="danger" size="small" plain>撤销</el-button>
+                </template>
+              </el-popconfirm>
+            </template>
+            <span v-else style="color: #909399; font-size: 12px">已撤销留痕</span>
           </template>
         </el-table-column>
       </el-table>
@@ -58,16 +81,17 @@
       </div>
     </el-card>
 
-    <!-- 新建入库单弹窗 -->
-    <el-dialog v-model="createDialog.visible" title="新建采购入库单" width="900px" :close-on-click-modal="false">
+    <!-- 新建 / 编辑入库单弹窗 -->
+    <el-dialog v-model="createDialog.visible" :title="createDialog.editId ? '编辑采购入库单' : '新建采购入库单'"
+      width="1040px" style="max-width: 96vw" :close-on-click-modal="false">
       <el-form label-width="80px">
         <el-row :gutter="20">
-          <el-col :span="10">
+          <el-col :span="9">
             <el-form-item label="供应商" required>
               <el-input v-model="createDialog.supplier" placeholder="如：某某试剂公司 / 校内仓库" />
             </el-form-item>
           </el-col>
-          <el-col :span="14">
+          <el-col :span="15">
             <el-form-item label="备注">
               <el-input v-model="createDialog.remark" placeholder="选填" />
             </el-form-item>
@@ -77,11 +101,21 @@
 
       <!-- 明细列表 -->
       <el-card shadow="never" style="background: #f5f7fa; margin-bottom: 12px">
-        <div style="font-weight: 600; margin-bottom: 8px; font-size: 14px">
+        <div style="font-weight: 600; margin-bottom: 10px; font-size: 14px">
           物资明细（下拉选择已有物资，或直接输入新物资名称）
         </div>
+        <!-- 表头：列宽必须与下方每行完全一致，否则数字列会被挤到看不见 -->
+        <el-row :gutter="8" class="detail-head">
+          <el-col :span="7">物资名称</el-col>
+          <el-col :span="3">类别</el-col>
+          <el-col :span="3">规格型号</el-col>
+          <el-col :span="2">单位</el-col>
+          <el-col :span="3">数量</el-col>
+          <el-col :span="4">单价（元）</el-col>
+          <el-col :span="2" style="text-align: center">操作</el-col>
+        </el-row>
         <div v-for="(item, index) in createDialog.items" :key="index" style="margin-bottom: 8px">
-          <el-row :gutter="8" style="align-items: center">
+          <el-row :gutter="8" style="align-items: center" class="detail-row">
             <el-col :span="7">
               <el-select
                 v-model="item.materialId"
@@ -93,25 +127,27 @@
                 <el-option v-for="m in allMaterials" :key="m.id" :label="m.name + (m.specification ? '（' + m.specification + '）' : '')" :value="m.id" />
               </el-select>
             </el-col>
-            <el-col :span="4">
+            <el-col :span="3">
               <el-select v-if="isNewItem(item)" v-model="item.category" placeholder="类别" style="width: 100%">
                 <el-option v-for="cat in categories" :key="cat.code" :label="cat.name" :value="cat.code" />
               </el-select>
               <el-tag v-else style="width: 100%; text-align: center">{{ categoryLabel(item.category) }}</el-tag>
             </el-col>
-            <el-col :span="4">
+            <el-col :span="3">
               <el-input v-model="item.specification" placeholder="规格型号" :disabled="!isNewItem(item)" />
             </el-col>
             <el-col :span="2">
               <el-input v-model="item.unit" placeholder="单位" :disabled="!isNewItem(item)" />
             </el-col>
-            <el-col :span="2">
-              <el-input-number v-model="item.quantity" :min="1" :max="99999" style="width: 100%" controls-position="right" />
-            </el-col>
+            <!-- 数量/单价关掉加减按钮：带按钮时输入框左右内边距固定占约 57px，
+                 列宽不足就只能显示 1 位数字（原来数量列只有 2/24 宽正是此症状） -->
             <el-col :span="3">
-              <el-input-number v-model="item.unitPrice" :min="0" :precision="2" style="width: 100%" controls-position="right" placeholder="单价" />
+              <el-input-number v-model="item.quantity" :min="1" :max="99999" :controls="false" style="width: 100%" />
             </el-col>
-            <el-col :span="1" style="text-align: center">
+            <el-col :span="4">
+              <el-input-number v-model="item.unitPrice" :min="0" :precision="2" :controls="false" style="width: 100%" placeholder="0.00" />
+            </el-col>
+            <el-col :span="2" style="text-align: center">
               <el-button type="danger" :icon="Delete" circle text @click="removeItem(index)" />
             </el-col>
           </el-row>
@@ -123,7 +159,9 @@
 
       <template #footer>
         <el-button @click="createDialog.visible = false">取消</el-button>
-        <el-button type="success" @click="handleCreate" :loading="createDialog.saving">提交入库</el-button>
+        <el-button type="success" @click="handleCreate" :loading="createDialog.saving">
+          {{ createDialog.editId ? '保存修改' : '提交入库' }}
+        </el-button>
       </template>
     </el-dialog>
 
@@ -136,6 +174,18 @@
         <el-descriptions-item label="入库数量">{{ detailDialog.order.totalQuantity }}</el-descriptions-item>
         <el-descriptions-item label="总金额">¥{{ detailDialog.order.totalAmount ? detailDialog.order.totalAmount.toFixed(2) : '0.00' }}</el-descriptions-item>
         <el-descriptions-item label="备注">{{ detailDialog.order.remark || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="单据状态">
+          <el-tag :type="isRevoked(detailDialog.order) ? 'danger' : 'success'" size="small"
+            :effect="isRevoked(detailDialog.order) ? 'plain' : 'light'">
+            {{ isRevoked(detailDialog.order) ? '已撤销（库存已回退）' : '正常' }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item v-if="isRevoked(detailDialog.order)" label="撤销人">
+          {{ detailDialog.order.revokeOperator || '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item v-if="isRevoked(detailDialog.order)" label="撤销时间">
+          {{ formatTime(detailDialog.order.revokeTime) }}
+        </el-descriptions-item>
       </el-descriptions>
       <el-table :data="detailDialog.items" stripe size="small" style="width: 100%">
         <el-table-column prop="materialName" label="物资名称" min-width="130" />
@@ -158,10 +208,14 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search, Plus, Delete } from '@element-plus/icons-vue'
 import { stockInApi, materialApi, categoryApi } from '../api'
+import { authStore } from '../stores/auth'
+
+// 采购入库属于日常业务，教师与超管均可操作（服务端同样有校验）
+const isAdmin = computed(() => authStore.isAdmin)
 
 const loading = ref(false)
 const tableData = ref([])
@@ -173,7 +227,8 @@ const categories = ref([])
 const allMaterials = ref([])
 
 const createDialog = reactive({
-  visible: false, saving: false,
+  // editId 有值 = 编辑既有入库单，为空 = 新建
+  visible: false, saving: false, editId: null,
   supplier: '', remark: '',
   items: []
 })
@@ -187,6 +242,10 @@ function categoryLabel(code) {
 }
 function isNewItem(item) {
   return typeof item.materialId !== 'number'
+}
+/** 单据是否已撤销（历史数据该字段可能为空，按正常处理） */
+function isRevoked(order) {
+  return order && order.status === 'REVOKED'
 }
 function formatTime(t) {
   if (!t) return '-'
@@ -211,16 +270,62 @@ function newItem() {
   return { materialId: null, materialName: '', category: '', specification: '', unit: '', quantity: 1, unitPrice: null }
 }
 function showCreateDialog() {
+  createDialog.editId = null
   createDialog.supplier = ''
   createDialog.remark = ''
   createDialog.items = [newItem()]
   createDialog.visible = true
+  ensureRefData()
+}
+
+/** 下拉数据（物资、分类）按需加载一次即可 */
+function ensureRefData() {
   if (allMaterials.value.length === 0) {
     materialApi.list().then(data => { allMaterials.value = data || [] }).catch(() => {})
   }
   if (categories.value.length === 0) {
     categoryApi.list().then(data => { categories.value = data || [] }).catch(() => {})
   }
+}
+
+/**
+ * 编辑入库单：把原明细回填到同一套表单里，提交时走 PUT，
+ * 由服务端在同一事务内先回退旧库存与流水、再按新明细重新入库。
+ */
+function showEditDialog(row) {
+  createDialog.editId = row.id
+  createDialog.supplier = row.supplier || ''
+  createDialog.remark = row.remark || ''
+  createDialog.items = [newItem()]
+  createDialog.visible = true
+  ensureRefData()
+  stockInApi.detail(row.id).then(data => {
+    const order = data.order || {}
+    createDialog.supplier = order.supplier || ''
+    createDialog.remark = order.remark || ''
+    const items = (data.items || []).map(it => ({
+      materialId: it.materialId,
+      materialName: it.materialName,
+      category: it.category,
+      specification: it.specification || '',
+      unit: it.unit || '',
+      quantity: it.quantity,
+      unitPrice: it.unitPrice
+    }))
+    createDialog.items = items.length > 0 ? items : [newItem()]
+  }).catch(e => {
+    ElMessage.error('明细加载失败：' + e.message)
+    createDialog.visible = false
+    createDialog.editId = null
+  })
+}
+
+/** 撤销入库单：回退库存、删除明细与对应库存流水（服务端整体事务） */
+function handleRevoke(row) {
+  stockInApi.revoke(row.id).then(() => {
+    ElMessage.success('入库单已撤销：库存与流水已回退，单据保留为「已撤销」')
+    loadData()
+  }).catch(e => ElMessage.error(e.message || '撤销失败'))
 }
 function addItem() {
   createDialog.items.push(newItem())
@@ -284,10 +389,17 @@ function handleCreate() {
       }
     })
   }
-  stockInApi.create(payload)
+  const isEdit = !!createDialog.editId
+  const call = isEdit
+    ? stockInApi.update(createDialog.editId, payload)
+    : stockInApi.create(payload)
+  call
     .then(order => {
-      ElMessage.success(`入库成功（单号 ${order.inNo}）`)
+      ElMessage.success(isEdit
+        ? `入库单 ${order.inNo} 已更新，库存与流水同步调整`
+        : `入库成功（单号 ${order.inNo}）`)
       createDialog.visible = false
+      createDialog.editId = null
       loadData()
     })
     .catch(e => ElMessage.error(e.message))
@@ -309,3 +421,16 @@ function showDetail(row) {
 
 onMounted(loadData)
 </script>
+
+<style scoped>
+/* 明细表头：与下方每行同列宽（同一套 el-row/el-col 栅格），只做视觉弱化 */
+.detail-head {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #909399;
+}
+/* 数字输入框取消加减按钮后默认居中，这里统一左对齐，读起来与其它字段一致 */
+.detail-row :deep(.el-input-number .el-input__inner) {
+  text-align: left;
+}
+</style>

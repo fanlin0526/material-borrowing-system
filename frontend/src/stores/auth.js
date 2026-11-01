@@ -49,6 +49,7 @@ class AuthStore {
           role: info.role,        // ← 以服务端为准
           phone: info.phone,
           avatar: info.avatar,
+          creditScore: info.creditScore,
         }
       }
     } catch {
@@ -69,6 +70,7 @@ class AuthStore {
       role: info.role,
       phone: info.phone,
       avatar: info.avatar,
+      creditScore: info.creditScore,
     }
     localStorage.setItem('token', token)
     localStorage.setItem('user', JSON.stringify(this.state.user)) // 仅用于跨标签页同步

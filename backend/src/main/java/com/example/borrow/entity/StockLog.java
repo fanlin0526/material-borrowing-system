@@ -55,11 +55,17 @@ public class StockLog {
     @Column(length = 200)
     private String remark;
 
+    /**
+     * 记账时间。正常业务由 @PrePersist 自动填当前时间；
+     * 历史台账补录（如演示数据初始化）允许显式指定，用于还原真实的业务时间线。
+     */
     @Column(updatable = false)
     private LocalDateTime createTime;
 
     @PrePersist
     protected void onCreate() {
-        createTime = LocalDateTime.now();
+        if (createTime == null) {
+            createTime = LocalDateTime.now();
+        }
     }
 }

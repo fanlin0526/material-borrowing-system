@@ -9,7 +9,9 @@ import com.example.borrow.repository.BorrowRecordRepository;
 import com.example.borrow.repository.CategoryRepository;
 import com.example.borrow.repository.MaterialRepository;
 import com.example.borrow.repository.SystemConfigRepository;
+import com.example.borrow.repository.TrainingRecordRepository;
 import com.example.borrow.repository.UserRepository;
+import com.example.borrow.service.StockLogService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -37,7 +39,16 @@ public class DataInit implements CommandLineRunner {
     private CategoryRepository categoryRepository;
 
     @Autowired
+    private StockLogService stockLogService;
+
+    @Autowired
     private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private TrainingRecordRepository trainingRecordRepository;
+
+    /** 演示数据的建账起始时间：早于所有演示借用记录，用于还原「期初入库 → 借出 → 归还」的时间线 */
+    private static final int DEMO_INIT_DAYS_AGO = 30;
 
     @Override
     public void run(String... args) {
@@ -56,6 +67,11 @@ public class DataInit implements CommandLineRunner {
             initCategories();
         }
 
+        // 必须在任何物资更新（演示记录、默认字段补齐、定时任务）之前执行。
+        materialRepository.initNullVersions();
+
+        LocalDateTime initTime = LocalDateTime.now().minusDays(DEMO_INIT_DAYS_AGO);
+
         if (materialRepository.count() > 0) {
             // 物资已存在，只检查是否需要补充演示借用记录
             if (borrowRecordRepository.count() == 0) {
@@ -63,6 +79,8 @@ public class DataInit implements CommandLineRunner {
                 createDemoBorrowRecords(saved);
                 System.out.println(">>> 补充初始化演示借用记录完成");
             }
+            fillNewFieldDefaults(false);
+            backfillBorrowerUsername();
             return;
         }
 
@@ -138,17 +156,133 @@ public class DataInit implements CommandLineRunner {
         };
 
         java.util.List<Material> saved = new java.util.ArrayList<>();
-        saved.addAll(saveItems(devices));
-        saved.addAll(saveItems(consumables));
-        saved.addAll(saveItems(waters));
-        saved.addAll(saveItems(reagents));
-        saved.addAll(saveItems(glassware));
+        saved.addAll(saveItems(devices, initTime));
+        saved.addAll(saveItems(consumables, initTime));
+        saved.addAll(saveItems(waters, initTime));
+        saved.addAll(saveItems(reagents, initTime));
+        saved.addAll(saveItems(glassware, initTime));
 
         System.out.println(">>> 初始化样本数据完成，共 " + saved.size() + " 条物料");
 
         // ====== 演示借用记录 ======
         createDemoBorrowRecords(saved);
         System.out.println(">>> 初始化演示借用记录完成");
+        backfillBorrowerUsername();
+
+        // 注意顺序：演示借用记录会把 saveItems 阶段创建的实例整行 merge 回库，
+        // 若在其之前补新字段，会被这批 merge 覆盖（历史的顺序问题），因此放在其后。
+        fillNewFieldDefaults(true);
+    }
+
+    /**
+     * 为「对标真实实验室系统」新增的字段补齐演示数据。
+     *
+     * 幂等：只填空白项，不覆盖已有设置，可反复执行；对已经跑过旧版本的数据库同样有效，
+     * 因此升级后不需要清库重来。填充内容：
+     *  - 用户：学院、实验室、导师（学生）、信用分、启用状态、首登改密标记；
+     *  - 物资：可外借、培训要求、机时/借用单价、危化品标记与柜位、有效期、下次检定日期；
+     *  - 培训资质：给两名学生登记一台示例设备的有效资质，用于演示「无资质不能预约」。
+     */
+    private void fillNewFieldDefaults(boolean demoDefaults) {
+        // ===== 用户 =====
+        java.util.List<User> users = userRepository.findAll();
+        boolean userChanged = false;
+        for (User u : users) {
+            boolean staff = "SUPER_ADMIN".equals(u.getRole()) || "TEACHER".equals(u.getRole());
+            if (u.getEnabled() == null) { u.setEnabled(true); userChanged = true; }
+            if (u.getPasswordChanged() == null) { u.setPasswordChanged(true); userChanged = true; }
+            if (u.getCreditScore() == null) { u.setCreditScore(100); userChanged = true; }
+            if (u.getDepartment() == null) { u.setDepartment(staff ? "实验中心" : "软件学院"); userChanged = true; }
+            if (u.getLabName() == null) { u.setLabName("电子与嵌入式实验室"); userChanged = true; }
+            if (!staff && u.getMentorName() == null) { u.setMentorName("王老师"); userChanged = true; }
+        }
+        if (userChanged) userRepository.saveAll(users);
+
+        // ===== 物资 =====
+        java.util.List<Material> materials = materialRepository.findAll();
+        boolean materialChanged = false;
+        Long trainingSampleId = null;
+        boolean hazardSampleMarked = false;
+        // 示例「需培训」设备优先选频谱分析仪，避免占用日常演示常用的示波器
+        for (Material m : materials) {
+            if (m.getName() != null && m.getName().contains("频谱分析仪")) trainingSampleId = m.getId();
+        }
+        if (trainingSampleId == null) {
+            for (Material m : materials) {
+                if ("DEVICE".equals(m.getCategory())) trainingSampleId = m.getId();
+            }
+        }
+        for (Material m : materials) {
+            boolean device = "DEVICE".equals(m.getCategory());
+            boolean returnable = device || "GLASSWARE".equals(m.getCategory());
+            boolean reagent = "REAGENT".equals(m.getCategory());
+
+            if (m.getBorrowable() == null) { m.setBorrowable(true); materialChanged = true; }
+            if (m.getNeedsTraining() == null) { m.setNeedsTraining(false); materialChanged = true; }
+            if (m.getApprovalRequired() == null) { m.setApprovalRequired(false); materialChanged = true; }
+            if (m.getHazardous() == null) { m.setHazardous(false); materialChanged = true; }
+            // 价格字段在实体里有 Java 默认值 0.0，新建出来的对象永远不是 null，
+            // 因此演示数据场景要显式按「0 也视为未配置」处理（已有库中该列刚加时为 null，同样会补上）
+            Double hourly = m.getHourlyPrice();
+            if (hourly == null || (demoDefaults && hourly == 0.0)) {
+                m.setHourlyPrice(device ? 20.0 : 0.0);
+                materialChanged = true;
+            }
+            Double unitPrice = m.getUnitPrice();
+            if (unitPrice == null || (demoDefaults && unitPrice == 0.0)) {
+                m.setUnitPrice(device ? 50.0 : (reagent ? 30.0 : 2.0));
+                materialChanged = true;
+            }
+            if (returnable && (m.getNextMaintenanceDate() == null || demoDefaults)) {
+                m.setNextMaintenanceDate(java.time.LocalDate.now().plusMonths(6));
+                materialChanged = true;
+            }
+            if (reagent && (m.getValidUntil() == null || demoDefaults)) {
+                m.setValidUntil(java.time.LocalDate.now().plusMonths(6));
+                materialChanged = true;
+            }
+            if (trainingSampleId != null && trainingSampleId.equals(m.getId())
+                    && !Boolean.TRUE.equals(m.getNeedsTraining())) {
+                m.setNeedsTraining(true);
+                materialChanged = true;
+            }
+            // 示例设备同时标记「借用需审批」：高值仪器连教师本人借也要走审批，
+            // 用来演示「低值登记即走、高值强制审批」的分级规则
+            if (trainingSampleId != null && trainingSampleId.equals(m.getId())
+                    && !Boolean.TRUE.equals(m.getApprovalRequired())) {
+                m.setApprovalRequired(true);
+                materialChanged = true;
+            }
+            if (reagent && !hazardSampleMarked) {
+                if (!Boolean.TRUE.equals(m.getHazardous())) { m.setHazardous(true); materialChanged = true; }
+                if (m.getCasNo() == null) { m.setCasNo("64-17-5"); materialChanged = true; }
+                if (m.getCabinetNo() == null) { m.setCabinetNo("B201 危化品柜 A-2"); materialChanged = true; }
+                hazardSampleMarked = true;
+            }
+        }
+        if (materialChanged) materialRepository.saveAll(materials);
+
+        // ===== 培训资质示例 =====
+        if (trainingRecordRepository.count() == 0 && trainingSampleId != null) {
+            Material sample = materialRepository.findById(trainingSampleId).orElse(null);
+            if (sample != null) {
+                for (String un : new String[]{"zhangming", "lihua"}) {
+                    User u = userRepository.findByUsername(un).orElse(null);
+                    if (u == null) continue;
+                    com.example.borrow.entity.TrainingRecord r = new com.example.borrow.entity.TrainingRecord();
+                    r.setMaterialId(sample.getId());
+                    r.setMaterialName(sample.getName());
+                    r.setUsername(u.getUsername());
+                    r.setRealName(u.getRealName());
+                    r.setTrainer("王老师");
+                    r.setTrainDate(java.time.LocalDate.now().minusDays(10));
+                    r.setValidUntil(java.time.LocalDate.now().plusYears(1));
+                    r.setRemark("实验室安全与仪器操作培训（演示数据）");
+                    trainingRecordRepository.save(r);
+                }
+                System.out.println(">>> 初始化培训资质演示数据完成（示例设备：" + sample.getName() + "）");
+            }
+        }
     }
 
     private void initUsers() {
@@ -175,7 +309,7 @@ public class DataInit implements CommandLineRunner {
         System.out.println(">>> 初始化用户数据完成，共 " + users.length + " 个用户");
     }
 
-    private java.util.List<Material> saveItems(Object[][] items) {
+    private java.util.List<Material> saveItems(Object[][] items, LocalDateTime initTime) {
         java.util.List<Material> list = new java.util.ArrayList<>();
         for (Object[] item : items) {
             Material m = new Material();
@@ -190,8 +324,13 @@ public class DataInit implements CommandLineRunner {
             m.setLocation((String) item[6]);
             // 预警阈值：总量的20%，最少2
             m.setWarningThreshold(Math.max(2, qty / 5));
+            m.setDeviceStatus("AVAILABLE");
             materialRepository.save(m);
             list.add(m);
+
+            // 库存流水：期初建账入库（可借数量 0 → qty），记账时间取建账起始时间
+            stockLogService.recordAt(m, "IN", qty, 0, qty, "MANUAL", m.getId(),
+                    "期初建账入库", initTime);
         }
         return list;
     }
@@ -221,12 +360,25 @@ public class DataInit implements CommandLineRunner {
             {47, 0, 1, 0, 1},  // 移液管 - 张明
         };
 
+        // 演示记录的借用时刻固定落在实验室开放时段（8:00-18:00）内，且彼此错开。
+        // 若沿用 now()，时间点会等于应用首次启动的时刻：傍晚/夜间启动时，
+        // 全部演示记录都会落在 8-18 点窗口之外，仪表盘的「借用时段热力分布」会整块为空。
+        int[] demoHours = {9, 10, 11, 13, 14, 15, 16, 17, 10, 14, 11, 15, 16, 9};
+
+        int planIndex = 0;
         for (int[] plan : borrowPlan) {
             Material m = materials.get(plan[0]);
             int qty = plan[2];
+            LocalDateTime borrowTime = LocalDateTime.now().minusDays(plan[4])
+                    .withHour(demoHours[planIndex % demoHours.length])
+                    .withMinute((planIndex * 7) % 60)
+                    .withSecond(0)
+                    .withNano(0);
+            planIndex++;
 
             // 更新可借数量
-            m.setAvailableQuantity(m.getAvailableQuantity() - qty);
+            int before = m.getAvailableQuantity();
+            m.setAvailableQuantity(before - qty);
             materialRepository.save(m);
 
             BorrowRecord record = new BorrowRecord();
@@ -234,12 +386,17 @@ public class DataInit implements CommandLineRunner {
             record.setMaterialName(m.getName());
             record.setMaterialCategory(m.getCategory());
             record.setBorrower(borrowers[plan[1]]);
+            record.setBorrowerUsername(usernameForRealName(borrowers[plan[1]]));
             record.setBorrowQuantity(qty);
             record.setStatus("BORROWED");
-            record.setBorrowTime(LocalDateTime.now().minusDays(plan[4]));
+            record.setBorrowTime(borrowTime);
             record.setExpectedReturnTime(LocalDateTime.now().plusDays(7 - plan[4]));
             record.setPurpose(purposes[plan[3]]);
-            borrowRecordRepository.save(record);
+            record = borrowRecordRepository.save(record);
+
+            // 库存流水：借出（before → before-qty），记账时间取实际借用时间
+            stockLogService.recordAt(m, "OUT_BORROW", -qty, before, before - qty,
+                    "BORROW", record.getId(), "借出：" + record.getBorrower(), borrowTime);
         }
 
         // 制造几条已归还记录
@@ -255,21 +412,66 @@ public class DataInit implements CommandLineRunner {
         for (int[] plan : returnedPlan) {
             Material m = materials.get(plan[0]);
             int qty = plan[2];
+            // 同样落在实验时段内：已归还记录也是「借用」行为，缺失会让热力图少掉三分之一演示数据
+            LocalDateTime borrowTime = LocalDateTime.now().minusDays(plan[4])
+                    .withHour(demoHours[planIndex % demoHours.length])
+                    .withMinute((planIndex * 7) % 60)
+                    .withSecond(0)
+                    .withNano(0);
+            LocalDateTime returnTime = LocalDateTime.now().minusDays(plan[5])
+                    .withHour(demoHours[(planIndex + 5) % demoHours.length])
+                    .withMinute((planIndex * 11) % 60)
+                    .withSecond(0)
+                    .withNano(0);
+            planIndex++;
 
             BorrowRecord record = new BorrowRecord();
             record.setMaterialId(m.getId());
             record.setMaterialName(m.getName());
             record.setMaterialCategory(m.getCategory());
             record.setBorrower(borrowers[plan[1]]);
+            record.setBorrowerUsername(usernameForRealName(borrowers[plan[1]]));
             record.setBorrowQuantity(qty);
             record.setStatus("RETURNED");
-            record.setBorrowTime(LocalDateTime.now().minusDays(plan[4]));
-            record.setActualReturnTime(LocalDateTime.now().minusDays(plan[5]));
+            record.setBorrowTime(borrowTime);
+            record.setActualReturnTime(returnTime);
             record.setExpectedReturnTime(LocalDateTime.now().plusDays(7 - plan[4]));
             record.setPurpose(purposes[plan[3]]);
             record.setReturnRemark("完好归还");
-            borrowRecordRepository.save(record);
+            record = borrowRecordRepository.save(record);
+
+            // 库存流水：借出 + 归还成对补录，净变动为 0，因此不改动可借数量，
+            // 但两条流水的 before/after 按时间顺序推演，保证台账能对上每一笔进出
+            int base = m.getAvailableQuantity();
+            stockLogService.recordAt(m, "OUT_BORROW", -qty, base, base - qty,
+                    "BORROW", record.getId(), "借出：" + record.getBorrower(), borrowTime);
+            stockLogService.recordAt(m, "RETURN", qty, base - qty, base,
+                    "BORROW", record.getId(), "归还：" + record.getBorrower(), returnTime);
         }
+    }
+
+    /** 旧库升级：借用记录补稳定用户名。姓名重复且无法唯一确定时保留为空，等待管理员核对。 */
+    private void backfillBorrowerUsername() {
+        int changed = 0;
+        for (BorrowRecord record : borrowRecordRepository.findAll()) {
+            if (record.getBorrowerUsername() == null || record.getBorrowerUsername().isEmpty()) {
+                String username = usernameForRealName(record.getBorrower());
+                if (username != null) {
+                    record.setBorrowerUsername(username);
+                    borrowRecordRepository.save(record);
+                    changed++;
+                }
+            }
+        }
+        if (changed > 0) {
+            System.out.println(">>> 已为 " + changed + " 条历史借用记录回填用户账号");
+        }
+    }
+
+    private String usernameForRealName(String realName) {
+        if (realName == null || realName.isEmpty()) return null;
+        java.util.List<User> users = userRepository.findByRealName(realName);
+        return users.size() == 1 ? users.get(0).getUsername() : null;
     }
 
     private void initCategories() {

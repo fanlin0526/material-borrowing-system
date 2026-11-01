@@ -40,6 +40,21 @@ public class StockIn {
     @Column(length = 500)
     private String remark;
 
+    /**
+     * 单据状态：NORMAL-正常，REVOKED-已撤销。
+     * 撤销采用「留痕」方式：单据与明细保留，仅标记状态并把库存回退，
+     * 便于事后追查「这单为什么少了 / 谁撤的」。历史数据该字段可能为 null，按正常处理。
+     */
+    @Column(length = 20)
+    private String status = "NORMAL";
+
+    /** 撤销人（仅已撤销的单据有值） */
+    @Column(length = 50)
+    private String revokeOperator;
+
+    /** 撤销时间 */
+    private LocalDateTime revokeTime;
+
     @Column(updatable = false)
     private LocalDateTime createTime;
 

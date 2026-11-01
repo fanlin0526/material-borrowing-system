@@ -1,6 +1,7 @@
 package com.example.borrow.security;
 
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtBuilder;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
@@ -43,14 +44,35 @@ public class JwtUtil {
 
     /** 生成 Token */
     public static String generate(String username, String role) {
+        return generate(username, role, null);
+    }
+
+    /**
+     * 生成 Token（附带真实姓名）
+     *
+     * 真实姓名随 Token 一起签发，服务端才能用它作为「操作人」写入记录，
+     * 而不是从请求体里取——请求体是客户端可控的，可被伪造成任意人名。
+     */
+    public static String generate(String username, String role, String realName) {
         Date now = new Date();
-        return Jwts.builder()
+        JwtBuilder builder = Jwts.builder()
                 .setSubject(username)
                 .claim("role", role)
                 .setIssuedAt(now)
-                .setExpiration(new Date(now.getTime() + EXPIRATION))
-                .signWith(KEY)
-                .compact();
+                .setExpiration(new Date(now.getTime() + EXPIRATION));
+        if (realName != null && !realName.isEmpty()) {
+            builder.claim("realName", realName);
+        }
+        return builder.signWith(KEY).compact();
+    }
+
+    /** 从 Token 中获取真实姓名；旧 Token 不含该声明时返回 null */
+    public static String getRealName(String token) {
+        try {
+            return parse(token).get("realName", String.class);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** 解析 Token */

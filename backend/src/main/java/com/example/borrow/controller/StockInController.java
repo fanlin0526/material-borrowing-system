@@ -2,6 +2,7 @@ package com.example.borrow.controller;
 
 import com.example.borrow.entity.StockIn;
 import com.example.borrow.entity.StockInItem;
+import com.example.borrow.security.RoleGuard;
 import com.example.borrow.service.StockInService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
@@ -18,11 +19,12 @@ public class StockInController {
     @Autowired
     private StockInService stockInService;
 
-    /** 入库单列表（分页） */
+    /** 入库单列表（分页）；仅教师 / 超级管理员 */
     @GetMapping
     public Result<?> list(@RequestParam(required = false) String keyword,
                           @RequestParam(defaultValue = "1") int page,
                           @RequestParam(defaultValue = "10") int size) {
+        RoleGuard.requireStaff();
         Page<StockIn> result = stockInService.list(keyword, page, size);
         Map<String, Object> data = new HashMap<>();
         data.put("content", result.getContent());
@@ -33,17 +35,38 @@ public class StockInController {
         return Result.ok(data);
     }
 
-    /** 入库单详情（含明细） */
+    /** 入库单详情（含明细）；仅教师 / 超级管理员 */
     @GetMapping("/{id}")
     public Result<?> detail(@PathVariable Long id) {
+        RoleGuard.requireStaff();
         return Result.ok(stockInService.detail(id));
     }
 
-    /** 创建入库单（提交后自动增加库存并记流水） */
+    /** 创建入库单（提交后自动增加库存并记流水）；仅教师 / 超级管理员 */
     @PostMapping
     public Result<?> create(@RequestBody CreateRequest request) {
+        RoleGuard.requireStaff();
         StockIn order = stockInService.create(request.getSupplier(), request.getRemark(), request.getItems());
         return Result.ok(order);
+    }
+
+    /**
+     * 编辑入库单：整体回退旧明细的库存与流水后按新明细重新入库；
+     * 仅教师 / 超级管理员
+     */
+    @PutMapping("/{id}")
+    public Result<?> update(@PathVariable Long id, @RequestBody CreateRequest request) {
+        RoleGuard.requireStaff();
+        StockIn order = stockInService.update(id, request.getSupplier(), request.getRemark(), request.getItems());
+        return Result.ok(order);
+    }
+
+    /** 撤销入库单：回退库存、删除明细与流水；仅教师 / 超级管理员 */
+    @DeleteMapping("/{id}")
+    public Result<?> revoke(@PathVariable Long id) {
+        RoleGuard.requireStaff();
+        stockInService.revoke(id);
+        return Result.ok();
     }
 
     static class CreateRequest {

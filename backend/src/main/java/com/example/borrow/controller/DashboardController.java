@@ -6,6 +6,7 @@ import com.example.borrow.entity.Material;
 import com.example.borrow.repository.BorrowRecordRepository;
 import com.example.borrow.repository.CategoryRepository;
 import com.example.borrow.repository.MaterialRepository;
+import com.example.borrow.security.RoleGuard;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -29,6 +30,22 @@ public class DashboardController {
     private CategoryRepository categoryRepository;
 
     /**
+     * 借用记录按角色分口径的唯一收口点。
+     *
+     * 教师/超管 = 全量（管理视角）；学生 = 只看本人，与 /api/borrow 的归属口径一致。
+     * 这里**只过滤借用记录**：物资总数、分类分布、库存健康度、分类消耗比例都来自物资表，
+     * 物资目录本来对所有角色可见，不参与分口径。
+     */
+    private List<BorrowRecord> scopeRecords(List<BorrowRecord> all) {
+        if (RoleGuard.isStaff()) return all;
+        String me = com.example.borrow.security.UserContext.getUsername();
+        return all.stream()
+                .filter(r -> me != null && (me.equals(r.getBorrowerUsername())
+                        || r.getBorrowerUsername() == null && me.equals(r.getBorrower())))
+                .collect(java.util.stream.Collectors.toList());
+    }
+
+    /**
      * 仪表盘综合数据：统计卡片 + 分类分布 + 近7天借用趋势 + 热门物资 + 最近记录
      */
     @GetMapping
@@ -36,14 +53,18 @@ public class DashboardController {
         Map<String, Object> data = new LinkedHashMap<>();
 
         List<Material> allMaterials = materialRepository.findAll();
-        List<BorrowRecord> allRecords = borrowRecordRepository.findAll();
+        // 借用类指标按角色分口径；物资类指标为全量
+        List<BorrowRecord> allRecords = scopeRecords(borrowRecordRepository.findAll());
 
         // ===== 1. 统计卡片 =====
         Map<String, Object> cards = new LinkedHashMap<>();
         cards.put("totalMaterials", allMaterials.size());
 
-        long borrowing = allRecords.stream().filter(r -> "BORROWED".equals(r.getStatus())).count();
+        // 缺陷6修复：借用中 = 未归还（BORROWED + OVERDUE），逾期记录也应计入
+        long borrowing = allRecords.stream()
+                .filter(r -> "BORROWED".equals(r.getStatus()) || "OVERDUE".equals(r.getStatus())).count();
         cards.put("borrowingCount", borrowing);
+        cards.put("overdueCount", allRecords.stream().filter(r -> "OVERDUE".equals(r.getStatus())).count());
         cards.put("totalRecords", allRecords.size());
 
         long lowStock = allMaterials.stream()
@@ -124,7 +145,8 @@ public class DashboardController {
         Map<String, Object> data = new LinkedHashMap<>();
 
         List<Material> allMaterials = materialRepository.findAll();
-        List<BorrowRecord> allRecords = borrowRecordRepository.findAll();
+        // 借用类指标按角色分口径；库存类指标为全量
+        List<BorrowRecord> allRecords = scopeRecords(borrowRecordRepository.findAll());
 
         // ===== 1. 设备使用率排名（按被借用次数 × 每次假设4小时 × 库存量折算） =====
         // 公式: 利用率 = 借用次数 / (库存总量 × 加权系数)

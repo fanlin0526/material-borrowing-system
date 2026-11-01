@@ -1,3 +1,4 @@
+#顶部 Tab「数据大盘」#
 <template>
   <div v-loading="loading">
     <!-- ===== 角色横幅 ===== -->
@@ -22,14 +23,19 @@
     <!-- ===== 统计卡片 6 个 ===== -->
     <el-row :gutter="20" style="margin-bottom: 24px">
       <el-col :span="4" v-for="(card, i) in cards" :key="i">
-        <el-card shadow="hover" class="stat-card" :body-style="{ padding: '20px' }">
+        <el-card
+          shadow="hover" class="stat-card"
+          :class="{ 'stat-card-clickable': card.to }"
+          :body-style="{ padding: '20px' }"
+          @click="card.to && $router.push(card.to)"
+        >
           <div class="stat-card-inner">
             <div class="stat-icon" :style="{ background: card.bg }">
               <span style="font-size: 24px">{{ card.icon }}</span>
             </div>
             <div class="stat-info">
               <div class="stat-num" :style="{ color: card.color }">{{ card.value }}</div>
-              <div class="stat-label">{{ card.label }}</div>
+              <div class="stat-label">{{ card.label }}<span v-if="card.to" class="stat-more">›</span></div>
             </div>
           </div>
         </el-card>
@@ -46,7 +52,7 @@
       </el-col>
       <el-col :span="15">
         <el-card shadow="hover">
-          <template #header><span class="card-title">设备使用率排名</span></template>
+          <template #header><span class="card-title">{{ chartTitles.device }}</span></template>
           <div ref="deviceUsageRef" style="height: 320px"></div>
         </el-card>
       </el-col>
@@ -56,13 +62,18 @@
     <el-row :gutter="20" style="margin-bottom: 24px">
       <el-col :span="9">
         <el-card shadow="hover">
-          <template #header><span class="card-title">借用月度对比</span></template>
+          <template #header><span class="card-title">{{ chartTitles.monthly }}</span></template>
           <div ref="monthlyRef" style="height: 300px"></div>
         </el-card>
       </el-col>
       <el-col :span="7">
         <el-card shadow="hover">
-          <template #header><span class="card-title">库存健康度</span></template>
+          <template #header>
+            <span class="card-title">库存充足率</span>
+            <el-tooltip placement="top" content="口径：可借数量高于自身预警阈值的物资占比（替代原先自造的「库存健康度」；设备完好率与机时利用率见「统计报表」）">
+              <el-icon style="margin-left: 4px; color: #909399; vertical-align: middle"><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </template>
           <div ref="healthRef" style="height: 300px"></div>
         </el-card>
       </el-col>
@@ -78,7 +89,7 @@
     <el-row :gutter="20" style="margin-bottom: 24px">
       <el-col :span="9">
         <el-card shadow="hover">
-          <template #header><span class="card-title">近7天借用趋势</span></template>
+          <template #header><span class="card-title">{{ chartTitles.trend }}</span></template>
           <div ref="trendRef" style="height: 300px"></div>
         </el-card>
       </el-col>
@@ -86,11 +97,12 @@
         <el-card shadow="hover">
           <template #header>
             <div style="display: flex; justify-content: space-between; align-items: center">
-              <span class="card-title">最近借用记录</span>
+              <span class="card-title">{{ chartTitles.recent }}</span>
               <el-button type="primary" link @click="$router.push('/borrow')">查看全部</el-button>
             </div>
           </template>
-          <el-table :data="recentRecords" size="small" style="width: 100%" :max-height="300">
+          <el-table :data="recentRecords" size="small" style="width: 100%" :max-height="300"
+                    :empty-text="isStaffScope ? '暂无借用记录' : '您还没有借用记录'">
             <el-table-column prop="materialName" label="物资名称" min-width="120" show-overflow-tooltip />
             <el-table-column label="类别" width="90">
               <template #default="{ row }">
@@ -99,12 +111,13 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="borrower" label="借用人" width="80" />
+            <!-- 学生口径下所有记录都是本人，借用人列无信息量 -->
+            <el-table-column v-if="isStaffScope" prop="borrower" label="借用人" width="80" />
             <el-table-column prop="borrowQuantity" label="数量" width="60" align="center" />
-            <el-table-column label="状态" width="80" align="center">
+            <el-table-column label="状态" width="90" align="center">
               <template #default="{ row }">
-                <el-tag :type="row.status === 'BORROWED' ? 'warning' : 'success'" size="small">
-                  {{ row.status === 'BORROWED' ? '借用中' : '已归还' }}
+                <el-tag :type="statusTag(row.status)" size="small">
+                  {{ statusLabel(row.status) }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -117,13 +130,36 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- ===== Row 4：热门借用物资 TOP5 + 借用时段热力分布 ===== -->
+    <el-row :gutter="20" style="margin-bottom: 24px">
+      <el-col :span="9">
+        <el-card shadow="hover">
+          <template #header><span class="card-title">{{ chartTitles.hot }}</span></template>
+          <div ref="hotRef" style="height: 320px"></div>
+        </el-card>
+      </el-col>
+      <el-col :span="15">
+        <el-card shadow="hover">
+          <template #header>
+            <div style="display: flex; justify-content: space-between; align-items: center">
+              <span class="card-title">{{ chartTitles.heat }}</span>
+              <!-- 后端只统计 8-18 点内的借用，窗口必须写出来，否则会被误读成"全部时段" -->
+              <span style="font-size: 12px; color: #909399">最近 30 天 · 开放时段 8:00-18:00</span>
+            </div>
+          </template>
+          <div ref="heatRef" style="height: 320px"></div>
+        </el-card>
+      </el-col>
+    </el-row>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, computed } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, nextTick, computed } from 'vue'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
+import { QuestionFilled } from '@element-plus/icons-vue'
 import { dashboardApi, categoryApi } from '../api'
 import { authStore } from '../stores/auth'
 
@@ -163,14 +199,51 @@ const loading = ref(false)
 const recentRecords = ref([])
 const categories = ref([])
 
-const cards = ref([
-  { label: '物资总数', value: 0, icon: '📦', color: '#409EFF', bg: '#ecf5ff' },
-  { label: '借用中', value: 0, icon: '🔄', color: '#E6A23C', bg: '#fdf6ec' },
-  { label: '借用记录', value: 0, icon: '📋', color: '#67C23A', bg: '#f0f9eb' },
-  { label: '库存预警', value: 0, icon: '⚠️', color: '#F56C6C', bg: '#fef0f0' },
-  { label: '库存健康', value: '0%', icon: '💚', color: '#00C9A7', bg: '#e8f8f5' },
-  { label: '本月借用', value: 0, icon: '📈', color: '#9B59B6', bg: '#f5f0ff' },
+/**
+ * 借用类指标的口径随角色变化：教师/超管看全量，学生只看本人。
+ * 口径由服务端决定（DashboardController.scopeRecords），前端只负责把标题写对 ——
+ * 否则学生会把「借用中」这种字样误读成全校数字。
+ * 物资类指标（物资总数/库存预警/库存健康）是全局的，不随角色变。
+ */
+const isStaffScope = computed(() => authStore.isAdmin)
+
+const chartTitles = computed(() => ({
+  device: isStaffScope.value ? '设备使用率排名' : '我的常用设备',
+  monthly: isStaffScope.value ? '借用月度对比' : '我的借用月度对比',
+  trend: isStaffScope.value ? '近7天借用趋势' : '我近7天借用趋势',
+  recent: isStaffScope.value ? '最近借用记录' : '我的最近记录',
+  hot: isStaffScope.value ? '热门借用物资 TOP5' : '我的常用物资 TOP5',
+  heat: isStaffScope.value ? '借用时段热力分布' : '我的借用时段分布',
+}))
+
+const cardValues = reactive({
+  totalMaterials: 0, borrowingCount: 0, totalRecords: 0,
+  lowStockCount: 0, healthScore: '0%', thisMonth: 0
+})
+
+const cards = computed(() => [
+  { label: '物资总数', value: cardValues.totalMaterials, icon: '📦', color: '#409EFF', bg: '#ecf5ff' },
+  { label: isStaffScope.value ? '借用中' : '我借用中', value: cardValues.borrowingCount, icon: '🔄', color: '#E6A23C', bg: '#fdf6ec' },
+  { label: isStaffScope.value ? '借用记录' : '我的记录', value: cardValues.totalRecords, icon: '📋', color: '#67C23A', bg: '#f0f9eb' },
+  // 带 to 的卡片可下钻；「库存预警」跳物资列表的预警视图（数据源即 /material/low-stock）
+  { label: '库存预警', value: cardValues.lowStockCount, icon: '⚠️', color: '#F56C6C', bg: '#fef0f0',
+    to: { path: '/material', query: { lowStock: '1' } } },
+  { label: '库存充足率', value: cardValues.healthScore, icon: '💚', color: '#00C9A7', bg: '#e8f8f5' },
+  { label: isStaffScope.value ? '本月借用' : '我本月借用', value: cardValues.thisMonth, icon: '📈', color: '#9B59B6', bg: '#f5f0ff' },
 ])
+
+// 最近记录表里的状态列：原实现只有"借用中/已归还"两态，
+// 学生看到自己的待审批、已损坏、已逾期记录会被错误显示成"已归还"
+const STATUS_LABEL = {
+  PENDING: '待审批', APPROVED: '已通过', REJECTED: '已拒绝', PENDING_EXTEND: '待审批延期',
+  BORROWED: '借用中', CONSUMED: '已领用', RETURNED: '已归还', OVERDUE: '已逾期', DAMAGED: '已损坏'
+}
+const STATUS_TAG = {
+  PENDING: 'info', APPROVED: 'warning', REJECTED: 'danger', PENDING_EXTEND: 'info',
+  BORROWED: 'warning', CONSUMED: 'success', RETURNED: 'success', OVERDUE: 'danger', DAMAGED: 'danger'
+}
+function statusLabel(s) { return STATUS_LABEL[s] || s }
+function statusTag(s) { return STATUS_TAG[s] || 'info' }
 
 const pieRef = ref(null)
 const trendRef = ref(null)
@@ -178,6 +251,30 @@ const deviceUsageRef = ref(null)
 const monthlyRef = ref(null)
 const healthRef = ref(null)
 const consumeRef = ref(null)
+const hotRef = ref(null)
+const heatRef = ref(null)
+
+/**
+ * ECharts 实例登记表。
+ * 同一 DOM 重复 echarts.init 会报「already initialized」，组件卸载后不 dispose
+ * 又会把 canvas 一直留在内存里，所以统一从这里取实例，并在卸载时集中释放。
+ */
+const chartInstances = new Set()
+
+function chartOf(el) {
+  if (!el) return null
+  let inst = echarts.getInstanceByDom(el)
+  if (!inst) {
+    inst = echarts.init(el)
+    chartInstances.add(inst)
+  }
+  return inst
+}
+
+/** 窗口尺寸变化时重绘（侧栏/筛选面板伸缩同样会改动画布宽度） */
+function resizeCharts() {
+  chartInstances.forEach(c => { if (!c.isDisposed()) c.resize() })
+}
 
 const categoryColors = {}
 
@@ -198,6 +295,26 @@ function formatTime(t) {
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
+/**
+ * ECharts 空数据占位。
+ * 借用类图表按角色分口径后，学生（尤其新建账号）可能一条记录都没有，
+ * 这些卡片会渲染成一块空白，容易被误认为页面坏了。
+ */
+function renderEmpty(el, text = '暂无数据', subtext = '') {
+  if (!el) return
+  const chart = chartOf(el)
+  if (!chart) return
+  chart.clear()
+  chart.setOption({
+    title: {
+      text, subtext,
+      left: 'center', top: 'middle',
+      textStyle: { color: '#C0C4CC', fontSize: 14, fontWeight: 'normal' },
+      subtextStyle: { color: '#DCDFE6', fontSize: 12 }
+    }
+  })
+}
+
 function loadData() {
   loading.value = true
   // 先加载分类数据
@@ -212,32 +329,34 @@ function loadData() {
 
   // 先加载基础数据（旧接口，一定可用）
   dashboardApi.overview().then(overview => {
-    cards.value[0].value = overview.cards.totalMaterials
-    cards.value[1].value = overview.cards.borrowingCount
-    cards.value[2].value = overview.cards.totalRecords
-    cards.value[3].value = overview.cards.lowStockCount
+    cardValues.totalMaterials = overview.cards.totalMaterials
+    cardValues.borrowingCount = overview.cards.borrowingCount
+    cardValues.totalRecords = overview.cards.totalRecords
+    cardValues.lowStockCount = overview.cards.lowStockCount
     recentRecords.value = overview.recentRecords
 
     nextTick(() => {
       initPieChart(overview.categoryPie)
       initTrendChart(overview.borrowTrend)
+      initHotChart(overview.topBorrowed)
     })
 
     // 再尝试加载扩展数据（新接口，不可用时降级）
     return dashboardApi.detail().then(detail => {
-      cards.value[4].value = (detail.health && detail.health.score != null) ? detail.health.score + '%' : '0%'
-      cards.value[5].value = (detail.monthlyComparison && detail.monthlyComparison.thisMonth != null)
+      cardValues.healthScore = (detail.health && detail.health.score != null) ? detail.health.score + '%' : '0%'
+      cardValues.thisMonth = (detail.monthlyComparison && detail.monthlyComparison.thisMonth != null)
         ? detail.monthlyComparison.thisMonth : 0
       nextTick(() => {
         initDeviceUsageChart(detail.deviceUsage)
         initMonthlyChart(detail.monthlyComparison)
         initHealthChart(detail.health)
         initConsumeChart(detail.consumeRate)
+        initHeatChart(detail.heatmap)
       })
     }).catch(() => {
       // detail 接口不可用，降级显示
-      cards.value[4].value = '--'
-      cards.value[5].value = '--'
+      cardValues.healthScore = '--'
+      cardValues.thisMonth = '--'
     })
   }).catch(e => ElMessage.error('加载失败：' + e.message))
     .finally(() => loading.value = false)
@@ -245,7 +364,7 @@ function loadData() {
 
 function initPieChart(pieData) {
   if (!pieRef.value) return
-  const chart = echarts.init(pieRef.value)
+  const chart = chartOf(pieRef.value)
   chart.setOption({
     tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
     legend: { bottom: 0, left: 'center', icon: 'circle' },
@@ -267,7 +386,7 @@ function initPieChart(pieData) {
 
 function initTrendChart(trend) {
   if (!trendRef.value) return
-  const chart = echarts.init(trendRef.value)
+  const chart = chartOf(trendRef.value)
   chart.setOption({
     tooltip: { trigger: 'axis' },
     grid: { left: 40, right: 20, top: 30, bottom: 30 },
@@ -290,8 +409,9 @@ function initTrendChart(trend) {
 
 // ===== 新增：设备使用率排名（横向柱状图） =====
 function initDeviceUsageChart(data) {
-  if (!deviceUsageRef.value || !data || data.length === 0) return
-  const chart = echarts.init(deviceUsageRef.value)
+  if (!deviceUsageRef.value) return
+  if (!data || data.length === 0) { renderEmpty(deviceUsageRef.value, '暂无借用记录'); return }
+  const chart = chartOf(deviceUsageRef.value)
   const top8 = data.slice(0, 8)
   const names = top8.map(d => d.name).reverse()
   const times = top8.map(d => d.times).reverse()
@@ -322,7 +442,7 @@ function initDeviceUsageChart(data) {
 // ===== 新增：月度对比（双柱对比图） =====
 function initMonthlyChart(data) {
   if (!monthlyRef.value || !data) return
-  const chart = echarts.init(monthlyRef.value)
+  const chart = chartOf(monthlyRef.value)
   const labels = [data.lastMonthLabel || '上月', data.thisMonthLabel || '本月']
   const values = [data.lastMonth || 0, data.thisMonth || 0]
   chart.setOption({
@@ -346,7 +466,7 @@ function initMonthlyChart(data) {
 // ===== 新增：库存健康度仪表盘 =====
 function initHealthChart(data) {
   if (!healthRef.value || !data) return
-  const chart = echarts.init(healthRef.value)
+  const chart = chartOf(healthRef.value)
   const score = data.score || 0
   chart.setOption({
     series: [
@@ -398,7 +518,10 @@ function initHealthChart(data) {
 // ===== 新增：分类消耗比例（环形图） =====
 function initConsumeChart(data) {
   if (!consumeRef.value || !data) return
-  const chart = echarts.init(consumeRef.value)
+  // 环形图只画已消耗的类别，全部满库存时会是空环，需要占位
+  const used = data.filter(d => d.consumed > 0)
+  if (used.length === 0) { renderEmpty(consumeRef.value, '暂无消耗记录'); return }
+  const chart = chartOf(consumeRef.value)
   chart.setOption({
     tooltip: { trigger: 'item', formatter: '{b}: {c}件 ({d}%)' },
     legend: { bottom: 0, left: 'center', icon: 'circle', textStyle: { fontSize: 11 } },
@@ -410,7 +533,7 @@ function initConsumeChart(data) {
       itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
       label: { show: false },
       emphasis: { label: { show: true, fontSize: 14, fontWeight: 'bold' } },
-      data: data.filter(d => d.consumed > 0).map(d => ({
+      data: used.map(d => ({
         name: d.name,
         value: d.consumed,
         itemStyle: { color: categoryColors[d.name] || '#909399' }
@@ -419,12 +542,119 @@ function initConsumeChart(data) {
   })
 }
 
-onMounted(loadData)
+// ===== 热门借用物资 TOP5（横向柱状图） =====
+// 与「设备使用率排名」的区别：那个只看 DEVICE 类，这里覆盖全部类别，
+// 玻璃器皿、耗材这类高频物资只有此处能体现。
+function initHotChart(data) {
+  if (!hotRef.value) return
+  if (!data || data.length === 0) { renderEmpty(hotRef.value, '暂无借用记录'); return }
+  const chart = chartOf(hotRef.value)
+  const top = data.slice(0, 5)
+  const names = top.map(d => d.name).reverse()
+  const counts = top.map(d => d.count).reverse()
+  const maxVal = Math.max(...counts, 1)
+  chart.setOption({
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
+      formatter: p => `${p[0].name}<br/>借用次数：<b>${p[0].value}</b> 次` },
+    grid: { left: 90, right: 50, top: 20, bottom: 30 },
+    xAxis: { type: 'value', max: maxVal + 2, minInterval: 1, splitLine: { lineStyle: { color: '#f0f0f0' } } },
+    yAxis: { type: 'category', data: names, axisLine: { lineStyle: { color: '#ddd' } },
+      axisLabel: { width: 80, overflow: 'truncate' } },
+    series: [{
+      type: 'bar',
+      data: counts,
+      barWidth: '55%',
+      itemStyle: {
+        borderRadius: [0, 6, 6, 0],
+        color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+          { offset: 0, color: '#9B59B6' },
+          { offset: 1, color: '#c39bd3' }
+        ])
+      },
+      label: { show: true, position: 'right', formatter: '{c} 次', color: '#606266' }
+    }]
+  })
+}
+
+// ===== 借用时段热力分布（星期 × 时段，后端仅统计最近 30 天） =====
+const WEEK_LABELS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+const HEAT_HOURS = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+
+function initHeatChart(data) {
+  if (!heatRef.value || !data) return
+  // 后端返回 周一~周日 → 小时 → 次数 的嵌套对象，转成 ECharts 需要的 [x, y, value]
+  const points = []
+  let total = 0
+  WEEK_LABELS.forEach((w, di) => {
+    const hourMap = data[w] || {}
+    HEAT_HOURS.forEach((h, hi) => {
+      const v = hourMap[h] || hourMap[String(h)] || 0
+      total += v
+      points.push([hi, di, v])
+    })
+  })
+  if (total === 0) {
+    renderEmpty(heatRef.value, '近 30 天暂无借用记录', '仅统计 8:00-18:00 时段内的借用')
+    return
+  }
+
+  const chart = chartOf(heatRef.value)
+  const maxVal = Math.max(...points.map(p => p[2]), 1)
+  chart.setOption({
+    tooltip: {
+      position: 'top',
+      formatter: p => `${WEEK_LABELS[p.value[1]]} ${HEAT_HOURS[p.value[0]]}:00-${HEAT_HOURS[p.value[0]] + 1}:00<br/>借用 <b>${p.value[2]}</b> 次`
+    },
+    grid: { left: 55, right: 20, top: 20, bottom: 62 },
+    xAxis: {
+      type: 'category',
+      data: HEAT_HOURS.map(h => h + ':00'),
+      splitArea: { show: true },
+      axisLabel: { fontSize: 10, color: '#909399' }
+    },
+    yAxis: {
+      type: 'category',
+      data: WEEK_LABELS,
+      splitArea: { show: true },
+      axisLabel: { fontSize: 11, color: '#909399' }
+    },
+    visualMap: {
+      min: 0, max: maxVal, calculable: true,
+      orient: 'horizontal', left: 'center', bottom: 0,
+      itemWidth: 12, itemHeight: 90,
+      inRange: { color: ['#ecf5ff', '#a0cfff', '#409EFF', '#1a56db'] },
+      textStyle: { fontSize: 10, color: '#909399' }
+    },
+    series: [{
+      type: 'heatmap',
+      data: points,
+      label: { show: false },
+      itemStyle: { borderRadius: 3, borderColor: '#fff', borderWidth: 2 },
+      emphasis: { itemStyle: { shadowBlur: 8, shadowColor: 'rgba(0,0,0,0.2)' } }
+    }]
+  })
+}
+
+onMounted(() => {
+  loadData()
+  window.addEventListener('resize', resizeCharts)
+})
+
+// 离开页面时释放所有图表实例，避免 canvas 常驻内存
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', resizeCharts)
+  chartInstances.forEach(c => { if (!c.isDisposed()) c.dispose() })
+  chartInstances.clear()
+})
 </script>
 
 <style scoped>
 .stat-card { border-radius: 10px; }
 .stat-card-inner { display: flex; align-items: center; gap: 14px; }
+/* 可下钻卡片：给出手型光标与悬停描边，避免"碰巧能点"的误导感 */
+.stat-card-clickable { cursor: pointer; transition: border-color .2s, transform .2s; }
+.stat-card-clickable:hover { border-color: #F56C6C; transform: translateY(-2px); }
+.stat-more { color: #F56C6C; font-weight: 700; margin-left: 2px; }
 .stat-icon {
   width: 52px; height: 52px;
   border-radius: 12px;

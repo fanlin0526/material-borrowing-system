@@ -13,6 +13,10 @@ data/
 *.mv.db
 *.trace.db
 
+# 附件上传目录（运行时生成）
+backend/uploads/
+uploads/
+
 # IDE
 .idea/
 *.iml
@@ -24,3 +28,12 @@ data/
 # 系统
 .DS_Store
 Thumbs.db
+
+# 演示视频（体积大，不进仓库）
+*.mp4
+*.avi
+*.mov
+
+# 压缩包
+*.zip
+*.rar

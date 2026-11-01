@@ -3,10 +3,10 @@ server:
 
 spring:
   datasource:
-    url: jdbc:mysql://localhost:3306/material_borrow?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
+    url: ${DB_URL:jdbc:mysql://localhost:3306/material_borrow?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true}
     driver-class-name: com.mysql.cj.jdbc.Driver
-    username: root
-    password: root
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:root}
   jpa:
     hibernate:
       ddl-auto: update

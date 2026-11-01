@@ -5,7 +5,7 @@
       <!-- 左侧 LOGO -->
       <div class="topbar-left">
         <span class="topbar-logo">🧪</span>
-        <span class="topbar-title">实验物资管理系统</span>
+        <span class="topbar-title">实验物资借用系统</span>
         <el-tag :type="adminBadgeType" size="small" effect="dark" class="admin-badge">{{ adminBadgeText }}</el-tag>
       </div>
 
@@ -46,7 +46,8 @@
             <div v-if="notifications.length === 0" style="text-align: center; color: #909399; padding: 20px">
               暂无通知
             </div>
-            <div v-for="n in notifications" :key="n.id" class="notif-item" :class="{ unread: !n.isRead }">
+            <div v-for="n in notifications" :key="n.id" class="notif-item" :class="{ unread: !n.isRead }"
+              @click="markOneRead(n)">
               <div class="notif-title">
                 <el-tag :type="notifTypeTag(n.type)" size="small" effect="dark">{{ notifTypeLabel(n.type) }}</el-tag>
                 <span class="notif-time">{{ formatNotifTime(n.createTime) }}</span>
@@ -131,14 +132,14 @@
 </template>
 
 <script setup>
-import { computed, ref, reactive, watch } from 'vue'
+import { computed, ref, reactive, watch, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   DataBoard, Box, Tickets, TrendCharts, Timer, ShoppingCart,
   ArrowDown, User, Switch, Bell, Setting, Document, Checked
 } from '@element-plus/icons-vue'
-import { notificationApi, authApi } from '../api'
+import { notificationApi, authApi, authFetch } from '../api'
 import { authStore } from '../stores/auth'
 
 const route = useRoute()
@@ -174,6 +175,7 @@ const tabs = computed(() => {
     return [
       ...base,
       { label: '采购入库', path: '/stock-in', icon: ShoppingCart },
+      { label: '预约管理', path: '/reservation', icon: Timer },
       { label: '审批管理', path: '/approval', icon: Checked, badge: pendingCount.value, badgeType: 'danger' },
       { label: '统计报表', path: '/report', icon: TrendCharts },
     ]
@@ -221,19 +223,26 @@ const adminBadgeType = computed(() => {
 function loadNotifications() {
   const u = currentUser.value
   if (!u || !u.username) return
-  notificationApi.list(u.username).then(data => {
+  notificationApi.list().then(data => {
     notifications.value = Array.isArray(data) ? data.slice(0, 20) : []
   }).catch(() => {})
-  notificationApi.unreadCount(u.username).then(data => {
+  notificationApi.unreadCount().then(data => {
     unreadCount.value = data.count || 0
   }).catch(() => {})
 }
 function markAllRead() {
   const u = currentUser.value
   if (!u || !u.username) return
-  notificationApi.readAll(u.username).then(() => {
+  notificationApi.readAll().then(() => {
     unreadCount.value = 0
     notifications.value.forEach(n => n.isRead = true)
+  }).catch(() => {})
+}
+function markOneRead(n) {
+  if (!n || n.isRead) return
+  notificationApi.readOne(n.id).then(() => {
+    n.isRead = true
+    unreadCount.value = Math.max(0, unreadCount.value - 1)
   }).catch(() => {})
 }
 function notifTypeLabel(t) {
@@ -249,22 +258,32 @@ function formatNotifTime(t) {
   const d = new Date(t)
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
-// 每分钟刷新待审批数
+// 每分钟刷新待审批数（借用申请 + 延期申请 + 预约申请）
 function loadPendingCount() {
-  fetch('/api/borrow/pending').then(r => r.json()).then(j => {
-    pendingCount.value = j.code === 200 && Array.isArray(j.data) ? j.data.length : 0
-  }).catch(() => {})
+  authFetch('/api/borrow/pending').then(r => r.json()).then(j => {
+    return j.code === 200 && Array.isArray(j.data) ? j.data.length : 0
+  }).catch(() => 0).then(borrowCnt => {
+    return authFetch('/api/reservation/pending').then(r => r.json()).then(j => {
+      const resvCnt = j.code === 200 && Array.isArray(j.data) ? j.data.length : 0
+      pendingCount.value = borrowCnt + resvCnt
+    }).catch(() => { pendingCount.value = borrowCnt })
+  })
 }
 loadPendingCount()
-setInterval(loadPendingCount, 60000)
-setInterval(() => {
-  const u = currentUser.value
-  if (u && u.username) {
-    notificationApi.unreadCount(u.username).then(data => {
-      unreadCount.value = data.count || 0
-    }).catch(() => {})
-  }
-}, 60000)
+// 轮询句柄统一登记，组件卸载时一并清理：
+// 切换账号会重建整个顶栏布局，不清理会不断累积「僵尸」定时器
+const timers = [
+  setInterval(loadPendingCount, 60000),
+  setInterval(() => {
+    const u = currentUser.value
+    if (u && u.username) {
+      notificationApi.unreadCount().then(data => {
+        unreadCount.value = data.count || 0
+      }).catch(() => {})
+    }
+  }, 60000)
+]
+onBeforeUnmount(() => timers.forEach(clearInterval))
 
 const handleCommand = (cmd) => {
   if (cmd === 'info') {
@@ -378,6 +397,7 @@ function handleChangePassword() {
   flex: 1;
   justify-content: center;
   height: 100%;
+  min-width: 0;
 }
 .topbar-tab {
   display: flex;
@@ -392,6 +412,7 @@ function handleChangePassword() {
   transition: all 0.2s;
   position: relative;
   white-space: nowrap;
+  flex: 0 0 auto;
 }
 .topbar-tab:hover {
   color: #409EFF;
@@ -463,6 +484,7 @@ function handleChangePassword() {
 }
 .notif-item:last-child { border-bottom: none; }
 .notif-item.unread { background: #ecf5ff; }
+.notif-item { cursor: pointer; border-radius: 6px; }
 .notif-title {
   display: flex;
   justify-content: space-between;
@@ -535,6 +557,17 @@ function handleChangePassword() {
 /* 内容区背景色微差 */
 .layout-super .admin-main { background: #fafafa; }
 .layout-teacher .admin-main { background: #f0f5f0; }
+
+/* 中等宽度屏幕下允许导航横向滚动，避免图标和文字挤在一起 */
+@media (max-width: 1500px) {
+  .topbar-left { margin-right: 16px; }
+  .topbar-tabs {
+    justify-content: flex-start;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+  .current-date { display: none; }
+}
 
 /* badge标签色彩 */
 .topbar-super .admin-badge { background: #C62828 !important; border-color: #C62828 !important; }

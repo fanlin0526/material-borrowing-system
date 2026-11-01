@@ -71,10 +71,15 @@ public class CategoryService {
         categoryRepository.deleteById(id);
     }
 
-    /** 根据分类编码判断是否可归还 */
+    /**
+     * 根据分类编码判断是否可归还（全局唯一口径）：
+     * 以分类表 t_category.returnable 为准 —— 与前端预约/领用按钮的判定同源；
+     * 分类表里查不到该编码时回退到内置规则（DEVICE / GLASSWARE 视为可归还）。
+     */
     public boolean isReturnable(String code) {
+        if (code == null) return false;
         return categoryRepository.findByCode(code)
-                .map(Category::getReturnable)
-                .orElse(false);
+                .map(c -> c.getReturnable() != null && c.getReturnable())
+                .orElseGet(() -> Material.isReturnable(code));
     }
 }

@@ -14,6 +14,10 @@ async function bootstrap() {
   app.use(ElementPlus)
   app.use(router)
   app.directive('permission', vPermission)
+
+  // 等待首次路由匹配完成后再挂载，避免登录页加载期间误渲染登录后的布局
+  // 触发未登录接口请求和反复刷新
+  await router.isReady()
   app.mount('#app')
 }
 

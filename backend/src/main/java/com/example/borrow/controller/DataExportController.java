@@ -6,6 +6,7 @@ import com.example.borrow.entity.Material;
 import com.example.borrow.repository.BorrowRecordRepository;
 import com.example.borrow.repository.CategoryRepository;
 import com.example.borrow.repository.MaterialRepository;
+import com.example.borrow.security.RoleGuard;
 import com.example.borrow.service.MaterialService;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -15,6 +16,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.io.InputStream;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -38,6 +40,8 @@ public class DataExportController {
 
     private static final String[] MATERIAL_HEADERS =
             {"编号", "物资名称", "类别", "规格型号", "单位", "总数量", "可借数量", "存放位置", "预警阈值", "设备状态", "创建时间"};
+    private static final String[] MATERIAL_IMPORT_HEADERS =
+            {"物资名称", "类别", "规格型号", "单位", "数量", "存放位置", "预警阈值"};
     private static final String[] BORROW_HEADERS =
             {"物资名称", "类别", "借用人", "数量", "状态", "借用时间", "预计归还", "实际归还", "用途", "审批人", "逾期天数", "罚款(元)"};
 
@@ -47,6 +51,7 @@ public class DataExportController {
     public void exportMaterials(@RequestParam(required = false) String keyword,
                                 @RequestParam(required = false) String category,
                                 HttpServletResponse response) throws IOException {
+        RoleGuard.requireStaff();
         List<Material> list = materialService.list(keyword, category);
         try (Workbook wb = new XSSFWorkbook()) {
             Sheet sheet = wb.createSheet("物资清单");
@@ -76,6 +81,7 @@ public class DataExportController {
     public void exportBorrows(@RequestParam(required = false) String status,
                               @RequestParam(required = false) String keyword,
                               HttpServletResponse response) throws IOException {
+        RoleGuard.requireStaff();
         List<BorrowRecord> list;
         if (status != null && !status.isEmpty()) {
             list = borrowRecordRepository.findByStatusOrderByBorrowTimeDesc(status);
@@ -109,22 +115,79 @@ public class DataExportController {
 
     // ==================== 导入：物资批量建档 ====================
 
+    /** 下载 Excel 批量建档模板，附填写说明和示例数据。 */
+    @GetMapping("/api/export/material-import-template")
+    public void exportMaterialImportTemplate(HttpServletResponse response) throws IOException {
+        RoleGuard.requireSuperAdmin();
+        try (Workbook wb = new XSSFWorkbook()) {
+            Sheet dataSheet = wb.createSheet("物资建档导入");
+            writeHeader(dataSheet, MATERIAL_IMPORT_HEADERS, wb);
+
+            Row sample1 = dataSheet.createRow(1);
+            sample1.createCell(0).setCellValue("数字示波器");
+            sample1.createCell(1).setCellValue("实验设备");
+            sample1.createCell(2).setCellValue("DS1054Z 50MHz");
+            sample1.createCell(3).setCellValue("台");
+            sample1.createCell(4).setCellValue(2);
+            sample1.createCell(5).setCellValue("A102电子实验室");
+            sample1.createCell(6).setCellValue(1);
+
+            Row sample2 = dataSheet.createRow(2);
+            sample2.createCell(0).setCellValue("杜邦线");
+            sample2.createCell(1).setCellValue("耗材");
+            sample2.createCell(2).setCellValue("公母头 20cm 40芯");
+            sample2.createCell(3).setCellValue("排");
+            sample2.createCell(4).setCellValue(20);
+            sample2.createCell(5).setCellValue("A103耗材柜");
+            sample2.createCell(6).setCellValue(3);
+
+            Sheet helpSheet = wb.createSheet("填写说明");
+            String[][] help = {
+                    {"项目", "说明"},
+                    {"适用场景", "批量新增物资并建立期初库存；不会给已有物资补货"},
+                    {"已有物资补货", "请到「采购入库」页面创建入库单"},
+                    {"支持格式", ".xlsx 或 .xls，单个文件不超过 10MB"},
+                    {"表头", "第一行必须是表头，顺序不可调整"},
+                    {"物资名称", "必填，文本"},
+                    {"类别", "必填，可填分类编码或中文名"},
+                    {"数量", "必填，大于 0 的整数"},
+                    {"规格型号、单位、存放位置", "可选"},
+                    {"预警阈值", "可选；留空时按 max(2, 数量 × 20%) 计算"},
+                    {"分类编码", "DEVICE、CONSUMABLE、WATER、REAGENT、GLASSWARE"},
+                    {"中文分类", "实验设备、耗材、实验用水、化学试剂、玻璃器皿"}
+            };
+            for (int i = 0; i < help.length; i++) {
+                Row row = helpSheet.createRow(i);
+                row.createCell(0).setCellValue(help[i][0]);
+                row.createCell(1).setCellValue(help[i][1]);
+            }
+            helpSheet.setColumnWidth(0, 24 * 256);
+            helpSheet.setColumnWidth(1, 70 * 256);
+
+            writeResponse(response, "物资建档导入模板.xlsx", wb);
+        }
+    }
+
     /**
      * Excel 模板列（第一行为表头）：
-     * 物资名称 | 类别编码(DEVICE/CONSUMABLE/WATER/REAGENT/GLASSWARE) | 规格型号 | 单位 | 数量 | 存放位置 | 预警阈值
+     * 物资名称 | 类别（编码或中文名） | 规格型号 | 单位 | 数量 | 存放位置 | 预警阈值
      */
     @PostMapping("/api/import/materials")
     public Result<?> importMaterials(@RequestParam("file") MultipartFile file) {
+        RoleGuard.requireSuperAdmin();
         if (file == null || file.isEmpty()) {
             return Result.fail("请选择要上传的Excel文件");
         }
         String filename = file.getOriginalFilename();
-        if (filename == null || !(filename.endsWith(".xlsx") || filename.endsWith(".xls"))) {
+        String lowerName = filename == null ? "" : filename.toLowerCase();
+        if (!(lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls"))) {
             return Result.fail("仅支持 .xlsx / .xls 格式的Excel文件");
         }
         List<String> errors = new ArrayList<>();
         int successCount = 0;
-        try (Workbook wb = new XSSFWorkbook(file.getInputStream())) {
+        // WorkbookFactory 同时支持 xlsx 与旧版 xls，不能固定使用 XSSFWorkbook。
+        try (InputStream input = file.getInputStream();
+             Workbook wb = WorkbookFactory.create(input)) {
             Sheet sheet = wb.getSheetAt(0);
             int totalRows = sheet.getLastRowNum() + 1;
             if (totalRows <= 1) {
@@ -138,9 +201,11 @@ public class DataExportController {
                     errors.add("第" + (i + 1) + "行：物资名称为空，已跳过");
                     continue;
                 }
-                String catCode = cellStr(r, 1);
-                if (catCode == null || !isValidCategory(catCode)) {
-                    errors.add("第" + (i + 1) + "行：类别编码「" + nvl(catCode) + "」无效（应为 DEVICE/CONSUMABLE/WATER/REAGENT/GLASSWARE），已跳过");
+                String rawCategory = cellStr(r, 1);
+                String catCode = resolveCategoryCode(rawCategory);
+                if (catCode == null) {
+                    errors.add("第" + (i + 1) + "行：类别「" + nvl(rawCategory)
+                            + "」无效（可填分类编码或中文分类名），已跳过");
                     continue;
                 }
                 int quantity = (int) cellNum(r, 4);
@@ -167,7 +232,7 @@ public class DataExportController {
         } catch (Exception e) {
             return Result.fail("Excel 解析失败：" + e.getMessage());
         }
-        String msg = "导入完成：成功 " + successCount + " 条";
+        String msg = "导入完成：成功新增 " + successCount + " 条物资并建立期初库存";
         if (!errors.isEmpty()) {
             msg += "，失败/跳过 " + errors.size() + " 条";
             msg += "\n" + String.join("\n", errors.subList(0, Math.min(errors.size(), 10)));
@@ -205,8 +270,17 @@ public class DataExportController {
         return categoryRepository.findByCode(code).map(Category::getName).orElse(code);
     }
 
-    private boolean isValidCategory(String code) {
-        return categoryRepository.findByCode(code).isPresent();
+    /** 导入时兼容分类编码和中文分类名，统一转换为系统编码。 */
+    private String resolveCategoryCode(String value) {
+        if (value == null || value.trim().isEmpty()) return null;
+        String key = value.trim();
+        Category byCode = categoryRepository.findByCode(key.toUpperCase()).orElse(null);
+        if (byCode != null) return byCode.getCode();
+        return categoryRepository.findAll().stream()
+                .filter(c -> key.equals(c.getName()))
+                .map(Category::getCode)
+                .findFirst()
+                .orElse(null);
     }
 
     private String deviceStatusName(String s) {

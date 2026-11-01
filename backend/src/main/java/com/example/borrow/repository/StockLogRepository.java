@@ -12,4 +12,7 @@ public interface StockLogRepository extends JpaRepository<StockLog, Long> {
     List<StockLog> findByMaterialIdOrderByCreateTimeDesc(Long materialId);
 
     Page<StockLog> findByMaterialIdOrderByCreateTimeDesc(Long materialId, Pageable pageable);
+
+    /** 撤销 / 编辑入库单时，删除该单据产生的库存流水 */
+    long deleteByRefTypeAndRefId(String refType, Long refId);
 }

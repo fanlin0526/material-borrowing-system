@@ -1,13 +1,14 @@
+#独立全屏登录/注册页，不带任何导航#
 <template>
   <div class="login-container">
     <!-- 左侧品牌区 -->
     <div class="login-left">
       <div class="brand-content">
         <div class="brand-logo">
-          <span class="logo-emoji">⏱️</span>
-          <span class="logo-title">实验室设备预约调度系统</span>
+          <span class="logo-emoji">📦</span>
+          <span class="logo-title">基于SpringBoot+Vue的实验物资借用系统的设计与实现</span>
         </div>
-        <p class="brand-tagline">Laboratory Equipment Scheduling System</p>
+        <p class="brand-tagline">Experimental Material Borrowing Management System</p>
 
         <!-- SVG 装饰插图 -->
         <div class="illustration">
@@ -77,11 +78,11 @@
       <div class="form-wrapper">
         <!-- 头像 -->
         <div class="avatar-circle">
-          <span>⏱️</span>
+          <span>📦</span>
         </div>
 
-        <h2 class="form-title">{{ isRegister ? '注册账号' : '欢迎登录' }}</h2>
-        <p class="form-subtitle">{{ isRegister ? '创建一个新账号开始使用' : '基于 SpringBoot + Vue 的实验室设备预约调度系统' }}</p>
+        <h2 class="form-title" :class="{ 'title-alone': !isRegister }">{{ isRegister ? '注册账号' : '欢迎登录' }}</h2>
+        <p v-if="isRegister" class="form-subtitle">注册固定为学生账号，借用 / 领用 / 预约需教师审批</p>
 
         <el-form ref="formRef" :model="form" :rules="rules" label-position="top" size="large" @submit.prevent="handleSubmit">
           <el-form-item prop="username">
@@ -113,6 +114,26 @@
             />
           </el-form-item>
 
+          <el-form-item v-if="isRegister" prop="department">
+            <el-input
+              v-model="form.department"
+              placeholder="所属学院 / 部门（用于统计与审批归属）"
+              :prefix-icon="UserFilled"
+              clearable
+            />
+          </el-form-item>
+
+          <el-form-item v-if="isRegister" prop="confirmPassword">
+            <el-input
+              v-model="form.confirmPassword"
+              type="password"
+              placeholder="请再次输入密码"
+              :prefix-icon="Lock"
+              show-password
+              @keyup.enter="handleSubmit"
+            />
+          </el-form-item>
+
           <div v-if="!isRegister" class="form-options">
             <el-checkbox v-model="rememberMe">记住我</el-checkbox>
             <el-link type="primary" :underline="false" @click="showForgot = !showForgot">忘记密码？</el-link>
@@ -136,65 +157,37 @@
           </div>
         </el-form>
 
-        <!-- 演示账号 -->
-        <div v-if="!isRegister" class="demo-accounts">
-          <el-divider content-position="center">
-            <span style="font-size: 12px; color: #909399">演示账号（密码均为 123456）</span>
-          </el-divider>
-          <div class="demo-section">
-            <div class="demo-section-title">👑 超级管理员</div>
-            <div class="demo-tags">
-              <el-tag
-                v-for="acc in demoAccounts.filter(a => a.role === 'SUPER_ADMIN')"
-                :key="acc.username"
-                class="demo-tag demo-tag-super"
-                type="danger"
-                effect="dark"
-                @click="quickFill(acc)"
-              >
-                {{ acc.label }}
-              </el-tag>
-            </div>
-          </div>
-          <div class="demo-section">
-            <div class="demo-section-title">🔑 教师</div>
-            <div class="demo-tags">
-              <el-tag
-                v-for="acc in demoAccounts.filter(a => a.role === 'TEACHER')"
-                :key="acc.username"
-                class="demo-tag"
-                type="warning"
-                effect="dark"
-                @click="quickFill(acc)"
-              >
-                {{ acc.label }}
-              </el-tag>
-            </div>
-          </div>
-          <div class="demo-section">
-            <div class="demo-section-title">👤 学生</div>
-            <div class="demo-tags">
-              <el-tag
-                v-for="acc in demoAccounts.filter(a => a.role === 'STUDENT')"
-                :key="acc.username"
-                class="demo-tag"
-                type="info"
-                effect="plain"
-                @click="quickFill(acc)"
-              >
-                {{ acc.label }}
-              </el-tag>
-            </div>
-          </div>
-        </div>
-
         <div v-if="showForgot" class="forgot-tip">
           <el-alert type="info" :closable="false" show-icon>
-            演示系统暂不支持找回密码，请使用演示账号登录。
+            系统暂不支持自助找回密码，请联系管理员重置。
           </el-alert>
         </div>
       </div>
     </div>
+
+    <!-- 首次登录（管理员重置过密码）强制改密：不可关闭 -->
+    <el-dialog v-model="forceChange" title="首次登录需修改密码" width="440px"
+      :close-on-click-modal="false" :close-on-press-escape="false" :show-close="false">
+      <el-alert type="warning" :closable="false" show-icon style="margin-bottom: 14px">
+        管理员已重置您的密码。为保障账号安全，请先设置新密码（至少 6 位）后再进入系统。
+      </el-alert>
+      <el-form label-width="90px">
+        <el-form-item label="原密码">
+          <el-input v-model="forceForm.oldPassword" type="password" show-password placeholder="请输入管理员给的密码" />
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input v-model="forceForm.newPassword" type="password" show-password placeholder="至少 6 位" />
+        </el-form-item>
+        <el-form-item label="确认密码">
+          <el-input v-model="forceForm.confirmPassword" type="password" show-password placeholder="再次输入新密码" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button type="primary" style="width: 100%" @click="submitForceChange" :loading="forceSaving">
+          保存并进入系统
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -212,11 +205,17 @@ const loading = ref(false)
 const isRegister = ref(false)
 const rememberMe = ref(false)
 const showForgot = ref(false)
+// 首次登录强制改密（管理员重置密码的账号）
+const forceChange = ref(false)
+const forceSaving = ref(false)
+const forceForm = reactive({ oldPassword: '', newPassword: '', confirmPassword: '' })
 
 const form = reactive({
   username: '',
   password: '',
-  realName: ''
+  realName: '',
+  department: '',
+  confirmPassword: ''
 })
 
 const rules = {
@@ -228,28 +227,29 @@ const rules = {
     { required: true, message: '请输入密码', trigger: 'blur' },
     { min: 6, message: '密码至少6个字符', trigger: 'blur' }
   ],
+  confirmPassword: [
+    { required: true, message: '请再次输入密码', trigger: 'blur' },
+    {
+      validator: (rule, value, callback) => {
+        if (value !== form.password) callback(new Error('两次输入的密码不一致'))
+        else callback()
+      },
+      trigger: 'blur'
+    }
+  ],
   realName: [
-    { required: false }
+    { required: true, message: '请输入真实姓名', trigger: 'blur' }
+  ],
+  department: [
+    { required: true, message: '请输入所属学院或部门', trigger: 'blur' }
   ]
-}
-
-const demoAccounts = [
-  { username: 'superadmin', label: '超级管理员', role: 'SUPER_ADMIN' },
-  { username: 'teacher', label: '王老师', role: 'TEACHER' },
-  { username: 'zhangming', label: '张明', role: 'STUDENT' },
-  { username: 'lihua', label: '李华', role: 'STUDENT' },
-  { username: 'wangfang', label: '王芳', role: 'STUDENT' },
-]
-
-const quickFill = (acc) => {
-  form.username = acc.username
-  form.password = '123456'
-  ElMessage.success('已填充账号：' + acc.label)
 }
 
 const toggleMode = () => {
   isRegister.value = !isRegister.value
   form.realName = ''
+  form.department = ''
+  form.confirmPassword = ''
   showForgot.value = false
 }
 
@@ -265,7 +265,13 @@ const handleSubmit = async () => {
   try {
     let res
     if (isRegister.value) {
-      res = await authApi.register({ ...form })
+      // 确认密码仅用于前端校验；导师由管理员在用户管理中指定
+      res = await authApi.register({
+        username: form.username,
+        password: form.password,
+        realName: form.realName,
+        department: form.department
+      })
       ElMessage.success('注册成功，正在登录...')
     } else {
       res = await authApi.login({ username: form.username, password: form.password })
@@ -288,12 +294,45 @@ const handleSubmit = async () => {
       localStorage.removeItem('rememberUser')
     }
 
+    // 管理员重置过密码 → 先强制改密再进入系统
+    if (res.needChangePassword) {
+      forceForm.oldPassword = form.password
+      forceForm.newPassword = ''
+      forceForm.confirmPassword = ''
+      forceChange.value = true
+      return
+    }
+
     // 跳转
     router.push('/dashboard')
   } catch (err) {
     ElMessage.error(err.message || '操作失败')
   } finally {
     loading.value = false
+  }
+}
+
+async function submitForceChange() {
+  if (!forceForm.oldPassword) { ElMessage.warning('请输入原密码'); return }
+  if (!forceForm.newPassword || forceForm.newPassword.length < 6) {
+    ElMessage.warning('新密码至少 6 位'); return
+  }
+  if (forceForm.newPassword !== forceForm.confirmPassword) {
+    ElMessage.warning('两次输入的新密码不一致'); return
+  }
+  forceSaving.value = true
+  try {
+    await authApi.updatePassword({
+      oldPassword: forceForm.oldPassword,
+      newPassword: forceForm.newPassword
+    })
+    ElMessage.success('密码已更新')
+    forceChange.value = false
+    router.push('/dashboard')
+  } catch (e) {
+    ElMessage.error(e.message || '修改失败')
+  } finally {
+    forceSaving.value = false
   }
 }
 
@@ -335,15 +374,16 @@ if (savedUser) {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 10px;
   margin-bottom: 12px;
+  flex-wrap: wrap;
 }
-.logo-emoji { font-size: 40px; }
+.logo-emoji { font-size: 32px; }
 .logo-title {
-  font-size: 26px;
+  font-size: 20px;
   font-weight: 700;
   color: #fff;
-  white-space: nowrap;
+  line-height: 1.5;
 }
 
 .brand-tagline {
@@ -445,6 +485,10 @@ if (savedUser) {
   background-clip: text;
 }
 
+.form-title.title-alone {
+  margin-bottom: 28px;
+}
+
 .form-subtitle {
   text-align: center;
   font-size: 14px;
@@ -482,43 +526,6 @@ if (savedUser) {
   margin-top: 16px;
   font-size: 14px;
   color: #909399;
-}
-
-.demo-accounts {
-  margin-top: 24px;
-}
-.demo-section {
-  margin-bottom: 12px;
-}
-.demo-section-title {
-  font-size: 12px;
-  color: #909399;
-  margin-bottom: 8px;
-  padding-left: 4px;
-}
-.demo-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: center;
-}
-.demo-tag {
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.demo-tag:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-}
-.demo-tag-admin {
-  font-weight: 600;
-  padding: 0 16px !important;
-  height: 32px !important;
-  line-height: 30px !important;
-}
-.demo-role-badge {
-  font-size: 14px;
-  margin-right: 2px;
 }
 
 .forgot-tip {

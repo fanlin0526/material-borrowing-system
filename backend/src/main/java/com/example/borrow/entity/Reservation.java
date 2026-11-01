@@ -48,7 +48,11 @@ public class Reservation {
     @Column(length = 20)
     private String recurringRule;
 
-    /** 状态：PENDING-待审批，APPROVED-已通过，REJECTED-已拒绝，CANCELLED-已取消 */
+    /**
+     * 状态：PENDING-待审批（新建即此状态，需教师/管理员审批），
+     * APPROVED-已通过（审批通过后自动生成借用/领用记录），
+     * REJECTED-已拒绝，CANCELLED-已取消，COMPLETED-时段结束并自动结单
+     */
     @Column(length = 20, nullable = false)
     private String status;
 
@@ -58,6 +62,26 @@ public class Reservation {
 
     /** 预约人数 */
     private Integer attendeeCount;
+
+    /** 审批人 */
+    @Column(length = 50)
+    private String approver;
+
+    /** 审批时间 */
+    private LocalDateTime approveTime;
+
+    /** 拒绝原因 */
+    @Column(length = 500)
+    private String rejectReason;
+
+    /** 审批通过后自动生成的借用/领用记录ID（形成 预约→审批→借用→归还 闭环） */
+    private Long borrowRecordId;
+
+    /** 预估机时费用（预约时长 × 物资机时单价；0 表示该物资不计费） */
+    private Double estimatedFee = 0.0;
+
+    /** 实际使用机时（小时，归还/结束时登记，用于机时利用率与结算统计） */
+    private Double usedHours;
 
     @Column(updatable = false)
     private LocalDateTime createTime;

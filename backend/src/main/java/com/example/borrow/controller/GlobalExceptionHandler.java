@@ -9,6 +9,9 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import javax.persistence.EntityNotFoundException;
+import javax.persistence.OptimisticLockException;
+import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.dao.PessimisticLockingFailureException;
 
 /**
  * 全局异常处理器 — 统一返回 JSON 格式错误，避免 Spring Boot 默认 HTML 错误页
@@ -27,6 +30,14 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.NOT_FOUND)
     public Result<?> handleNotFound(EntityNotFoundException e) {
         return Result.fail("资源不存在: " + e.getMessage());
+    }
+
+    /** 并发修改库存或单据时给出可理解的提示，而不是暴露数据库异常 */
+    @ExceptionHandler({OptimisticLockingFailureException.class, OptimisticLockException.class,
+            PessimisticLockingFailureException.class})
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public Result<?> handleConcurrentConflict(Exception e) {
+        return Result.fail("该物资刚被其他操作修改，库存或状态已发生变化，请刷新后重试");
     }
 
     /** 请求参数校验失败（@Valid） */
